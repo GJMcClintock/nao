@@ -15,7 +15,8 @@ interface LinkingCodesCardProps {
 const PROVIDER_LABELS: Record<MessagingProvider, { name: string; loginHint: string; setupHint: string }> = {
 	discord: {
 		name: 'Discord',
-		loginHint: 'Accounts link automatically by email. Send `login <code>` to the bot if yours does not link.',
+		loginHint:
+			'Send `login <code>` to the bot to link your account. Discord does not expose member emails to bots, so linking is always manual.',
 		setupHint: 'An admin still needs to finish the Discord bot setup.',
 	},
 	mattermost: {
