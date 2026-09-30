@@ -474,10 +474,11 @@ def test_snowflake_catalog_compares_folded_like_the_engine(tmp_path: Path):
     )
 
 
-def test_snowflake_multi_part_database_name_folds_each_component(tmp_path: Path):
-    """A configured name like `hive1.analytics` produces cumulative candidates, each
-    folded, so either component can be used as the catalog reference - as the engine
-    accepts, and independent of the case it is written in.
+def test_snowflake_multi_part_database_name_folds_the_leading_candidate(tmp_path: Path):
+    """A configured name like `hive1.analytics` produces the cumulative candidates
+    `hive1` and `hive1.analytics`, folded for unquoted requests, so a query naming a
+    prefix of the configured name as its catalog matches whatever case it is written
+    in. `other1.analytics` is not a prefix and is still not the connected database.
     """
     for configured in ("hive1.analytics", "HIVE1.Analytics"):
         config = FakeDatabaseConfig(
