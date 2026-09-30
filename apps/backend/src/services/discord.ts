@@ -60,6 +60,9 @@ import { posthog, PostHogEvent } from './posthog';
 /** Matches Slack's 200ms cadence; Discord rate-limits per-channel edits. */
 const UPDATE_INTERVAL_MS = 200;
 
+/** Node clamps setTimeout delays above 2^31-1 to 1ms, so this is the longest "run until stopped". */
+const GATEWAY_LISTENER_DURATION_MS = 2_147_483_647;
+
 type DiscordConversationContext = Omit<ConversationContext, 'blocks' | 'textBlockIndex'> & {
 	answerTextPartIndex: number;
 	bodyParts: string[];
@@ -78,6 +81,7 @@ class ProjectDiscordBot {
 	private readonly _emailByDiscordId: DiscordEmailCache = new Map();
 	private readonly _answerPostMutations = new Map<string, Promise<void>>();
 	private readonly _answerPostStates = new Map<string, DiscordAnswerMessageState>();
+	private _gatewayAbort: AbortController | null = null;
 
 	constructor(private readonly _config: DiscordConfig) {
 		this._adapter = createDiscordAdapter({
@@ -106,12 +110,45 @@ class ProjectDiscordBot {
 
 	public async start(): Promise<void> {
 		await this._bot.initialize();
+		await this._startGatewayListener();
 	}
 
 	public async stop(): Promise<void> {
-		// Discord interactions are stateless HTTP requests, so there is no connection to close.
+		// The gateway listener holds the only live connection. Interactions arrive as stateless HTTP
+		// requests, but a plain message only ever arrives over the gateway.
+		this._gatewayAbort?.abort();
+		this._gatewayAbort = null;
 		this._answerPostStates.clear();
 		this._answerPostMutations.clear();
+	}
+
+	/**
+	 * Plain Discord messages are delivered over the gateway only -- the HTTP webhook carries
+	 * interactions (slash commands, buttons), never a normal message. Without a listener the bot
+	 * looks healthy in the UI and silently ignores every mention. No webhookUrl is passed, so the
+	 * adapter processes messages in-process rather than forwarding them to an HTTP endpoint.
+	 */
+	private async _startGatewayListener(): Promise<void> {
+		this._gatewayAbort = new AbortController();
+		const response = await this._adapter.startGatewayListener(
+			{
+				waitUntil: (task: Promise<unknown>) => {
+					void task.catch((error: unknown) => {
+						logger.error(`Discord gateway listener stopped: ${String(error)}`, {
+							source: 'system',
+							projectId: this._config.projectId,
+						});
+					});
+				},
+			},
+			GATEWAY_LISTENER_DURATION_MS,
+			this._gatewayAbort.signal,
+		);
+		if (!response.ok) {
+			throw new Error(
+				`Could not start the Discord gateway listener: ${response.status} ${await response.text()}`,
+			);
+		}
 	}
 
 	private _registerHandlers(): void {
