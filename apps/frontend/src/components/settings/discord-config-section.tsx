@@ -60,7 +60,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 
 	const handleDelete = async () => {
 		await deleteDiscordConfig.mutateAsync();
-		queryClient.removeQueries(trpc.project.getDiscordConfig.queryOptions());
+		queryClient.invalidateQueries(trpc.project.getDiscordConfig.queryOptions());
 	};
 
 	const handleCancel = () => {
@@ -121,7 +121,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 				initialMentionRoleIds={(projectConfig?.mentionRoleIds ?? []).join(', ')}
 				initialRespondToChannelIds={(projectConfig?.respondToChannelIds ?? []).join(', ')}
 				initialFallbackUserEmail={projectConfig?.fallbackUserEmail ?? ''}
-			initialHideAnswerLink={projectConfig?.hideAnswerLink ?? false}
+				initialHideAnswerLink={projectConfig?.hideAnswerLink ?? false}
 				onSubmit={handleSubmit}
 				onCancel={handleCancel}
 				isPending={upsertDiscordConfig.isPending}
@@ -145,12 +145,18 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 						/>
 					</div>
 					<div className='flex gap-1'>
-						<Button variant='ghost' size='icon-sm' onClick={handleStartEditing}>
+						<Button
+							variant='ghost'
+							size='icon-sm'
+							aria-label='Edit Discord configuration'
+							onClick={handleStartEditing}
+						>
 							<Pencil className='size-3 text-muted-foreground' />
 						</Button>
 						<Button
 							variant='ghost'
 							size='icon-sm'
+							aria-label='Delete Discord configuration'
 							onClick={handleDelete}
 							disabled={deleteDiscordConfig.isPending}
 						>
@@ -172,7 +178,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 							onValueChange={handleModelChange}
 							disabled={updateDiscordModel.isPending}
 						>
-							<SelectTrigger className='w-full'>
+							<SelectTrigger className='w-full' aria-label='Model'>
 								<SelectValue>
 									{selectedModel && (
 										<div className='flex items-center gap-2'>
