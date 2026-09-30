@@ -710,6 +710,7 @@ export const projectRoutes = {
 					mentionRoleIds: config.mentionRoleIds ?? [],
 					respondToChannelIds: config.respondToChannelIds ?? [],
 					fallbackUserEmail: config.fallbackUserEmail ?? '',
+					hideAnswerLink: config.hideAnswerLink ?? false,
 				}
 			: null;
 
@@ -731,6 +732,7 @@ export const projectRoutes = {
 				mentionRoleIds: z.array(z.string()).optional(),
 				respondToChannelIds: z.array(z.string()).optional(),
 				fallbackUserEmail: z.string().trim().optional(),
+				hideAnswerLink: z.boolean().optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -766,6 +768,7 @@ export const projectRoutes = {
 				respondToChannelIds: input.respondToChannelIds,
 				fallbackUserId: fallbackUser?.id,
 				fallbackUserEmail,
+				hideAnswerLink: input.hideAnswerLink,
 			});
 			try {
 				await discordService.syncProject(config, ctx.project.id);

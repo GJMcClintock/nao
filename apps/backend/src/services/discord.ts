@@ -6,8 +6,6 @@ import { displayChart } from '@nao/shared/tools';
 import { InferUIMessageChunk, readUIMessageStream } from 'ai';
 import {
 	type AdapterPostableMessage,
-	Card,
-	CardText,
 	Chat,
 	type Logger as ChatLogger,
 	Message,
@@ -30,7 +28,6 @@ import { logger } from '../utils/logger';
 import {
 	createDiscordAnswerMessage,
 	createLiveToolCall,
-	createStopButtonActions,
 	createSummaryToolCalls,
 	EXCLUDED_TOOLS,
 	formatClarificationText,
@@ -39,6 +36,7 @@ import {
 } from '../utils/messaging-provider';
 import { agentService } from './agent';
 import {
+	buildDiscordAnswerPostable,
 	cacheDiscordEmail,
 	createDiscordMarkdownTable,
 	DISCORD_POST_MAX_LENGTH,
@@ -500,9 +498,11 @@ class ProjectDiscordBot {
 		if (!answerMessage) {
 			return;
 		}
-		const linkLength = chatUrl ? createDiscordAnswerMessage('', chatUrl).markdown.length + 2 : 0;
+		// Community servers can drop the footer link: it points at a UI those members may not have access to.
+		const answerUrl = this._config.hideAnswerLink ? undefined : chatUrl;
+		const linkLength = answerUrl ? createDiscordAnswerMessage('', answerUrl).markdown.length + 2 : 0;
 		const body = truncateDiscordMarkdown(this._renderBody(ctx), Math.max(DISCORD_POST_MAX_LENGTH - linkLength, 0));
-		const message = createDiscordAnswerMessage(body, chatUrl).markdown;
+		const message = createDiscordAnswerMessage(body, answerUrl).markdown;
 		await this._patchAnswerPost(answerMessage.id, (state) => {
 			state.message = message;
 		});
@@ -760,10 +760,7 @@ class ProjectDiscordBot {
 
 	/** The Stop action rides along with the answer message; Discord interactions carry no callback secret. */
 	private _buildAnswerPostable(state: DiscordAnswerMessageState): AdapterPostableMessage {
-		if (!state.stopAttached) {
-			return { markdown: state.message };
-		}
-		return Card({ children: [CardText(state.message || '✨ nao is answering...'), createStopButtonActions()] });
+		return buildDiscordAnswerPostable(state.message, state.stopAttached);
 	}
 
 	private async _setStopAttachment(postId: string, enabled: boolean): Promise<void> {
@@ -959,7 +956,8 @@ class DiscordService {
 			current.modelSelection?.modelId !== next.modelSelection?.modelId ||
 			!isSameStringArray(current.mentionRoleIds, next.mentionRoleIds) ||
 			!isSameStringArray(current.respondToChannelIds, next.respondToChannelIds) ||
-			current.fallbackUserId !== next.fallbackUserId
+			current.fallbackUserId !== next.fallbackUserId ||
+			current.hideAnswerLink !== next.hideAnswerLink
 		);
 	}
 }
