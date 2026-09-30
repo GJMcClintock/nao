@@ -49,6 +49,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 			publicKey: values.publicKey,
 			mentionRoleIds: parseIdList(values.mentionRoleIds),
 			respondToChannelIds: parseIdList(values.respondToChannelIds),
+			fallbackUserEmail: values.fallbackUserEmail.trim() || undefined,
 			modelProvider: selectedModel?.provider,
 			modelId: selectedModel?.modelId,
 		});
@@ -118,6 +119,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 				initialPublicKey={projectConfig?.publicKey ?? ''}
 				initialMentionRoleIds={(projectConfig?.mentionRoleIds ?? []).join(', ')}
 				initialRespondToChannelIds={(projectConfig?.respondToChannelIds ?? []).join(', ')}
+				initialFallbackUserEmail={projectConfig?.fallbackUserEmail ?? ''}
 				onSubmit={handleSubmit}
 				onCancel={handleCancel}
 				isPending={upsertDiscordConfig.isPending}

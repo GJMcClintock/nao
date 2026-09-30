@@ -280,7 +280,7 @@ class ProjectDiscordBot {
 			throw new Error('Could not retrieve user identity from Discord');
 		}
 
-		const user = await this._resolveLinkedUser(ctx.userMessage);
+		const user = (await this._resolveLinkedUser(ctx.userMessage)) ?? (await this._resolveFallbackUser());
 		if (!user) {
 			await ctx.thread.post(
 				'👋 I could not match your Discord account. Send `login <your-code>` to link manually. Find your code in project settings.',
@@ -288,6 +288,19 @@ class ProjectDiscordBot {
 			throw new Error('User not linked');
 		}
 		ctx.user = user;
+	}
+
+	/**
+	 * Discord never exposes member emails, so no member can link automatically. A community server
+	 * can nominate one nao user as the shared identity, and messages from unlinked members are then
+	 * answered as that user. Per-person attribution is deliberately given up -- that is the trade.
+	 */
+	private async _resolveFallbackUser(): Promise<User | null> {
+		const fallbackUserId = this._config.fallbackUserId;
+		if (!fallbackUserId) {
+			return null;
+		}
+		return getUser({ id: fallbackUserId });
 	}
 
 	private async _resolveLinkedUser(message: Message): Promise<User | null> {
@@ -908,7 +921,8 @@ class DiscordService {
 			current.modelSelection?.provider !== next.modelSelection?.provider ||
 			current.modelSelection?.modelId !== next.modelSelection?.modelId ||
 			!isSameStringArray(current.mentionRoleIds, next.mentionRoleIds) ||
-			!isSameStringArray(current.respondToChannelIds, next.respondToChannelIds)
+			!isSameStringArray(current.respondToChannelIds, next.respondToChannelIds) ||
+			current.fallbackUserId !== next.fallbackUserId
 		);
 	}
 }

@@ -709,6 +709,7 @@ export const projectRoutes = {
 					modelSelection: config.modelSelection,
 					mentionRoleIds: config.mentionRoleIds ?? [],
 					respondToChannelIds: config.respondToChannelIds ?? [],
+					fallbackUserEmail: config.fallbackUserEmail ?? '',
 				}
 			: null;
 
@@ -729,6 +730,7 @@ export const projectRoutes = {
 				modelId: z.string().optional(),
 				mentionRoleIds: z.array(z.string()).optional(),
 				respondToChannelIds: z.array(z.string()).optional(),
+				fallbackUserEmail: z.string().trim().optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -744,6 +746,15 @@ export const projectRoutes = {
 				});
 			}
 
+			const fallbackUserEmail = input.fallbackUserEmail || undefined;
+			const fallbackUser = fallbackUserEmail ? await userQueries.getUserByEmail(fallbackUserEmail) : null;
+			if (fallbackUserEmail && !fallbackUser) {
+				throw new TRPCError({
+					code: 'BAD_REQUEST',
+					message: `No user found with the email ${fallbackUserEmail}.`,
+				});
+			}
+
 			const config = await discordConfigQueries.upsertProjectDiscordConfig({
 				projectId: ctx.project.id,
 				botToken: input.botToken,
@@ -753,6 +764,8 @@ export const projectRoutes = {
 				modelId: input.modelId,
 				mentionRoleIds: input.mentionRoleIds,
 				respondToChannelIds: input.respondToChannelIds,
+				fallbackUserId: fallbackUser?.id,
+				fallbackUserEmail,
 			});
 			try {
 				await discordService.syncProject(config, ctx.project.id);
@@ -776,6 +789,7 @@ export const projectRoutes = {
 				modelSelection: config.modelSelection,
 				mentionRoleIds: config.mentionRoleIds ?? [],
 				respondToChannelIds: config.respondToChannelIds ?? [],
+				fallbackUserEmail: config.fallbackUserEmail ?? '',
 			};
 		}),
 
