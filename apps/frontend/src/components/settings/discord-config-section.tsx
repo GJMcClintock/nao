@@ -50,6 +50,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 			mentionRoleIds: parseIdList(values.mentionRoleIds),
 			respondToChannelIds: parseIdList(values.respondToChannelIds),
 			fallbackUserEmail: values.fallbackUserEmail.trim() || undefined,
+			hideAnswerLink: values.hideAnswerLink,
 			modelProvider: selectedModel?.provider,
 			modelId: selectedModel?.modelId,
 		});
@@ -120,6 +121,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 				initialMentionRoleIds={(projectConfig?.mentionRoleIds ?? []).join(', ')}
 				initialRespondToChannelIds={(projectConfig?.respondToChannelIds ?? []).join(', ')}
 				initialFallbackUserEmail={projectConfig?.fallbackUserEmail ?? ''}
+			initialHideAnswerLink={projectConfig?.hideAnswerLink ?? false}
 				onSubmit={handleSubmit}
 				onCancel={handleCancel}
 				isPending={upsertDiscordConfig.isPending}

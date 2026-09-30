@@ -59,8 +59,8 @@ export const createFeedbackModal = (): ModalElement => ({
 	],
 });
 
-export const createStopButtonActions = (): CardChild =>
-	Actions([Button({ id: 'stop_generation', label: 'Stop Generation', style: 'primary' })]);
+export const createStopButtonActions = (disabled = false): CardChild =>
+	Actions([Button({ id: 'stop_generation', label: 'Stop Generation', style: 'primary', disabled })]);
 
 export const createStopButtonCard = (): CardElement =>
 	Card({

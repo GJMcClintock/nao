@@ -1,6 +1,31 @@
 import type { DiscordAdapter } from '@chat-adapter/discord';
+import type { AdapterPostableMessage } from 'chat';
+import { Card, CardText } from 'chat';
 
 import type { SqlOutput } from '../types/messaging-provider';
+import { createStopButtonActions } from '../utils/messaging-provider';
+
+export const DISCORD_ANSWERING_PLACEHOLDER = '✨ nao is answering...';
+
+/**
+ * The Discord answer postable. Deliberately always a Card, never a bare markdown postable: the adapter
+ * writes `content` for markdown but leaves whatever embed and components a card wrote earlier in place,
+ * so switching between the two mid-stream renders the same answer twice -- the markdown content plus the
+ * card's stale embed, behind a Stop button that has already been detached.
+ */
+export const buildDiscordAnswerPostable = (
+	message: string,
+	stopAttached: boolean,
+): AdapterPostableMessage =>
+	Card({
+		children: [
+			CardText(message || DISCORD_ANSWERING_PLACEHOLDER),
+			// Kept on the message even after generation ends, greyed out: the adapter only sends
+			// `components` when the card has some, so dropping the row would leave the previous,
+			// still-clickable Stop button on the message instead of clearing it.
+			createStopButtonActions(!stopAttached),
+		],
+	});
 
 export const DISCORD_POST_MAX_LENGTH = 2_000;
 export const DISCORD_TABLE_ROW_LIMIT = 20;
