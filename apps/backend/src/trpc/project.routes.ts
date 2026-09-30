@@ -15,6 +15,7 @@ import { env } from '../env';
 import * as chatQueries from '../queries/chat.queries';
 import * as crQueries from '../queries/context-recommendation.queries';
 import * as projectQueries from '../queries/project.queries';
+import * as discordConfigQueries from '../queries/project-discord-config.queries';
 import * as llmConfigQueries from '../queries/project-llm-config.queries';
 import * as mattermostConfigQueries from '../queries/project-mattermost-config.queries';
 import * as savedPromptQueries from '../queries/project-saved-prompt.queries';
@@ -24,6 +25,8 @@ import * as telegramConfigQueries from '../queries/project-telegram-config.queri
 import * as whatsappConfigQueries from '../queries/project-whatsapp-config.queries';
 import * as projectWhatsappLinkQueries from '../queries/project-whatsapp-link.queries';
 import * as userQueries from '../queries/user.queries';
+import { discordService } from '../services/discord';
+import { DiscordConnectionError, validateDiscordConnection } from '../services/discord-helpers';
 import { mattermostService } from '../services/mattermost';
 import { MattermostConnectionError, validateMattermostConnection } from '../services/mattermost-helpers';
 import { mcpService } from '../services/mcp';
@@ -689,6 +692,113 @@ export const projectRoutes = {
 	deleteMattermostConfig: adminProtectedProcedure.mutation(async ({ ctx }) => {
 		await mattermostConfigQueries.deleteProjectMattermostConfig(ctx.project.id);
 		await mattermostService.stopProject(ctx.project.id);
+		return { success: true };
+	}),
+
+	getDiscordConfig: projectProtectedProcedure.query(async ({ ctx }) => {
+		if (!ctx.project) {
+			return { projectConfig: null, projectId: '', connected: false };
+		}
+
+		const config = await discordConfigQueries.getProjectDiscordConfig(ctx.project.id);
+		const projectConfig = config
+			? {
+					applicationId: config.applicationId,
+					botTokenPreview: config.botToken.slice(0, 4) + '...' + config.botToken.slice(-4),
+					publicKey: config.publicKey,
+					modelSelection: config.modelSelection,
+					mentionRoleIds: config.mentionRoleIds ?? [],
+					respondToChannelIds: config.respondToChannelIds ?? [],
+				}
+			: null;
+
+		return {
+			projectConfig,
+			projectId: ctx.project.id,
+			connected: discordService.getAdapter(ctx.project.id) !== null,
+		};
+	}),
+
+	upsertDiscordConfig: adminProtectedProcedure
+		.input(
+			z.object({
+				botToken: z.string().min(1),
+				applicationId: z.string().min(1),
+				publicKey: z.string().min(1),
+				modelProvider: llmProviderSchema.optional(),
+				modelId: z.string().optional(),
+				mentionRoleIds: z.array(z.string()).optional(),
+				respondToChannelIds: z.array(z.string()).optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			try {
+				await validateDiscordConnection({ botToken: input.botToken });
+			} catch (error) {
+				throw new TRPCError({
+					code: 'BAD_REQUEST',
+					message:
+						error instanceof DiscordConnectionError
+							? error.message
+							: 'Could not verify the Discord connection. Try again.',
+				});
+			}
+
+			const config = await discordConfigQueries.upsertProjectDiscordConfig({
+				projectId: ctx.project.id,
+				botToken: input.botToken,
+				applicationId: input.applicationId,
+				publicKey: input.publicKey,
+				modelProvider: input.modelProvider,
+				modelId: input.modelId,
+				mentionRoleIds: input.mentionRoleIds,
+				respondToChannelIds: input.respondToChannelIds,
+			});
+			try {
+				await discordService.syncProject(config, ctx.project.id);
+			} catch {
+				throw new TRPCError({
+					code: 'INTERNAL_SERVER_ERROR',
+					message: 'Discord connected, but the bot could not start. Try again.',
+				});
+			}
+
+			posthog.capture(ctx.user.id, PostHogEvent.DiscordConfigured, {
+				project_id: ctx.project.id,
+				modelProvider: input.modelProvider,
+				modelId: input.modelId,
+			});
+
+			return {
+				applicationId: config.applicationId,
+				botTokenPreview: config.botToken.slice(0, 4) + '...' + config.botToken.slice(-4),
+				publicKey: config.publicKey,
+				modelSelection: config.modelSelection,
+				mentionRoleIds: config.mentionRoleIds ?? [],
+				respondToChannelIds: config.respondToChannelIds ?? [],
+			};
+		}),
+
+	updateDiscordModelConfig: adminProtectedProcedure
+		.input(
+			z.object({
+				modelProvider: llmProviderSchema.optional(),
+				modelId: z.string().optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			await discordConfigQueries.updateProjectDiscordModel(
+				ctx.project.id,
+				input.modelProvider ?? null,
+				input.modelId ?? null,
+			);
+			const refreshedConfig = await discordConfigQueries.getProjectDiscordConfig(ctx.project.id);
+			await discordService.syncProject(refreshedConfig, ctx.project.id);
+		}),
+
+	deleteDiscordConfig: adminProtectedProcedure.mutation(async ({ ctx }) => {
+		await discordConfigQueries.deleteProjectDiscordConfig(ctx.project.id);
+		await discordService.stopProject(ctx.project.id);
 		return { success: true };
 	}),
 
