@@ -31,10 +31,12 @@ vi.mock('../src/db/db', async () => {
 
 const PROJECT_ID = 'discord-link-project';
 const OTHER_PROJECT_ID = 'discord-link-other-project';
-const DISCORD_USER_ID = 'discord-link-user';
-const OTHER_DISCORD_USER_ID = 'discord-link-other-user';
 const USER_ID = 'discord-link-nao-user';
 const OTHER_USER_ID = 'discord-link-nao-other-user';
+
+const link = (discordUserId: string, userId = USER_ID, projectId = PROJECT_ID) =>
+	upsertLinkedDiscordUser({ projectId, discordUserId, userId });
+const readLink = (discordUserId: string, projectId = PROJECT_ID) => getLinkedDiscordUser(projectId, discordUserId);
 
 describe('Discord account links', () => {
 	beforeAll(async () => {
@@ -54,44 +56,39 @@ describe('Discord account links', () => {
 	});
 
 	it('returns null for a Discord user that has never linked', async () => {
-		expect(await getLinkedDiscordUser(PROJECT_ID, DISCORD_USER_ID)).toBeNull();
+		expect(await readLink('discord-user-never-linked')).toBeNull();
 	});
 
 	it('reads back a link after the bot that created it is gone', async () => {
-		await upsertLinkedDiscordUser({
-			projectId: PROJECT_ID,
-			discordUserId: DISCORD_USER_ID,
-			userId: USER_ID,
-		});
+		await link('discord-user-read-back');
 
-		expect(await getLinkedDiscordUser(PROJECT_ID, DISCORD_USER_ID)).toEqual({ userId: USER_ID });
+		expect(await readLink('discord-user-read-back')).toEqual({ userId: USER_ID });
 	});
 
 	it('re-points an existing link at the newly linked user', async () => {
-		await upsertLinkedDiscordUser({
-			projectId: PROJECT_ID,
-			discordUserId: DISCORD_USER_ID,
-			userId: OTHER_USER_ID,
-		});
+		await link('discord-user-repoint');
+		await link('discord-user-repoint', OTHER_USER_ID);
 
-		expect(await getLinkedDiscordUser(PROJECT_ID, DISCORD_USER_ID)).toEqual({ userId: OTHER_USER_ID });
+		expect(await readLink('discord-user-repoint')).toEqual({ userId: OTHER_USER_ID });
 	});
 
 	it('keeps links separate per project', async () => {
-		await upsertLinkedDiscordUser({
-			projectId: OTHER_PROJECT_ID,
-			discordUserId: OTHER_DISCORD_USER_ID,
-			userId: USER_ID,
-		});
+		await link('discord-user-in-project');
+		await link('discord-user-in-other-project', USER_ID, OTHER_PROJECT_ID);
 
-		expect(await getLinkedDiscordUser(PROJECT_ID, OTHER_DISCORD_USER_ID)).toBeNull();
-		expect(await getLinkedDiscordUser(OTHER_PROJECT_ID, DISCORD_USER_ID)).toBeNull();
+		expect(await readLink('discord-user-in-other-project')).toBeNull();
+		expect(await readLink('discord-user-in-project', OTHER_PROJECT_ID)).toBeNull();
 	});
 
 	it('drops every link of a project when the integration is deleted', async () => {
+		await link('discord-user-deleted-a');
+		await link('discord-user-deleted-b', OTHER_USER_ID);
+		await link('discord-user-survives', USER_ID, OTHER_PROJECT_ID);
+
 		await deleteLinkedDiscordUsers(PROJECT_ID);
 
-		expect(await getLinkedDiscordUser(PROJECT_ID, DISCORD_USER_ID)).toBeNull();
-		expect(await getLinkedDiscordUser(OTHER_PROJECT_ID, OTHER_DISCORD_USER_ID)).toEqual({ userId: USER_ID });
+		expect(await readLink('discord-user-deleted-a')).toBeNull();
+		expect(await readLink('discord-user-deleted-b')).toBeNull();
+		expect(await readLink('discord-user-survives', OTHER_PROJECT_ID)).toEqual({ userId: USER_ID });
 	});
 });
