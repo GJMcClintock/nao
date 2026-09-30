@@ -24,6 +24,7 @@ export const upsertProjectDiscordConfig = async (data: {
 	respondToChannelIds?: string[];
 	fallbackUserId?: string;
 	fallbackUserEmail?: string;
+	hideAnswerLink?: boolean;
 }): Promise<DiscordConfig> => {
 	const updated = await takeFirstOrThrow(
 		db
@@ -39,6 +40,7 @@ export const upsertProjectDiscordConfig = async (data: {
 					discordRespondToChannelIds: data.respondToChannelIds,
 					discordFallbackUserId: data.fallbackUserId,
 					discordFallbackUserEmail: data.fallbackUserEmail,
+					discordHideAnswerLink: data.hideAnswerLink,
 				},
 			})
 			.where(eq(s.project.id, data.projectId))
@@ -79,6 +81,7 @@ export const updateProjectDiscordModel = async (
 					discordRespondToChannelIds: existing?.discordRespondToChannelIds,
 					discordFallbackUserId: existing?.discordFallbackUserId,
 					discordFallbackUserEmail: existing?.discordFallbackUserEmail,
+					discordHideAnswerLink: existing?.discordHideAnswerLink,
 				},
 			})
 			.where(eq(s.project.id, projectId))
@@ -113,6 +116,7 @@ function toDiscordConfig(projectId: string, settings: DiscordSettings | null | u
 		respondToChannelIds: settings.discordRespondToChannelIds,
 		fallbackUserId: settings.discordFallbackUserId,
 		fallbackUserEmail: settings.discordFallbackUserEmail,
+		hideAnswerLink: settings.discordHideAnswerLink,
 	};
 }
 
@@ -138,4 +142,5 @@ export interface DiscordConfig {
 	respondToChannelIds?: string[];
 	fallbackUserId?: string;
 	fallbackUserEmail?: string;
+	hideAnswerLink?: boolean;
 }

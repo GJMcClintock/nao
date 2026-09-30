@@ -12,6 +12,7 @@ export interface DiscordFormValues {
 	mentionRoleIds: string;
 	respondToChannelIds: string;
 	fallbackUserEmail: string;
+	hideAnswerLink: boolean;
 }
 
 export interface DiscordFormProps {
@@ -21,6 +22,7 @@ export interface DiscordFormProps {
 	initialMentionRoleIds: string;
 	initialRespondToChannelIds: string;
 	initialFallbackUserEmail: string;
+	initialHideAnswerLink: boolean;
 	onSubmit: (values: DiscordFormValues) => Promise<void>;
 	onCancel: () => void;
 	isPending: boolean;
@@ -33,6 +35,7 @@ export function DiscordForm({
 	initialMentionRoleIds,
 	initialRespondToChannelIds,
 	initialFallbackUserEmail,
+	initialHideAnswerLink,
 	onSubmit,
 	onCancel,
 	isPending,
@@ -46,6 +49,7 @@ export function DiscordForm({
 			mentionRoleIds: initialMentionRoleIds,
 			respondToChannelIds: initialRespondToChannelIds,
 			fallbackUserEmail: initialFallbackUserEmail,
+			hideAnswerLink: initialHideAnswerLink,
 		},
 		onSubmit: async ({ value }) => {
 			setSubmitError(undefined);
@@ -141,6 +145,30 @@ export function DiscordForm({
 						that user. Answers, history and feedback all belong to them, and anyone able to mention the bot
 						can reach whatever that user can see -- so use a dedicated account, not your own.
 					</p>
+					<form.Field name='hideAnswerLink'>
+						{(field: { state: { value: boolean }; handleChange: (v: boolean) => void }) => (
+							<div className='grid gap-1'>
+								<label
+									htmlFor='hideAnswerLink'
+									className='flex items-center gap-2 text-sm font-medium text-foreground'
+								>
+									<input
+										id='hideAnswerLink'
+										name='hideAnswerLink'
+										type='checkbox'
+										checked={field.state.value}
+										onChange={(event) => field.handleChange(event.target.checked)}
+										className='size-4 accent-primary'
+									/>
+									Do not add the "Open in nao" link to answers
+								</label>
+								<p className='text-[11px] text-muted-foreground leading-relaxed'>
+									Community servers: that footer link points members at a nao UI they may not have
+									access to. Turn it off to keep answers self-contained in Discord.
+								</p>
+							</div>
+						)}
+					</form.Field>
 				</div>
 
 				{submitError && <ErrorMessage message={submitError} />}
