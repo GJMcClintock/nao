@@ -524,19 +524,22 @@ def test_snowflake_catalog_compares_folded_like_the_engine(tmp_path: Path):
     )
 
 
-def test_snowflake_multi_part_database_name_folds_each_component(tmp_path: Path):
-    """A configured name like `hive1.analytics` produces cumulative candidates, each
-    folded, so either component can be used as the catalog reference - as the engine
-    accepts, and independent of the case it is written in.
+def test_snowflake_multi_part_database_name_folds_the_leading_candidate(tmp_path: Path):
+    """A configured name like `hive1.analytics` produces the cumulative candidates
+    `hive1` and `hive1.analytics`, folded for unquoted requests, so a query naming a
+    prefix of the configured name as its catalog matches whatever case it is written
+    in. The live schemas are unqualified here, so only the folded configured name can
+    accept that catalog. `other1.analytics` is not a prefix and is still not the
+    connected database.
     """
     for configured in ("hive1.analytics", "HIVE1.Analytics"):
         config = FakeDatabaseConfig(
             False,
-            {"HIVE1.ANALYTICS": ["ORDERS"]},
+            {"ANALYTICS": ["ORDERS"]},
             database_name=configured,
         )
         config.type = "snowflake"
-        allowed = {("HIVE1.ANALYTICS", "ORDERS")}
+        allowed = {("ANALYTICS", "ORDERS")}
 
         for sql in (
             "select id from hive1.analytics.orders",
@@ -546,7 +549,7 @@ def test_snowflake_multi_part_database_name_folds_each_component(tmp_path: Path)
 
     other_catalog = FakeDatabaseConfig(
         False,
-        {"HIVE1.ANALYTICS": ["ORDERS"]},
+        {"ANALYTICS": ["ORDERS"]},
         database_name="hive1.analytics",
     )
     other_catalog.type = "snowflake"
@@ -555,7 +558,7 @@ def test_snowflake_multi_part_database_name_folds_each_component(tmp_path: Path)
             "select id from other1.analytics.orders",
             other_catalog,
             tmp_path,
-            group_allowed_tables={("HIVE1.ANALYTICS", "ORDERS")},
+            group_allowed_tables={("ANALYTICS", "ORDERS")},
         )
 
 
