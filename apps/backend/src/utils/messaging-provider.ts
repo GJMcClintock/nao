@@ -131,14 +131,9 @@ export const createMattermostAnswerMessage = (markdown: string, chatUrl?: string
 	return { markdown: body ? `${body}\n\n${link}` : link };
 };
 
-export const createDiscordAnswerMessage = (markdown: string, chatUrl?: string): PostableMarkdown => {
-	if (!chatUrl) {
-		return { markdown };
-	}
-	const body = markdown.trim();
-	const link = `**[Open in nao](${chatUrl})**`;
-	return { markdown: body ? `${body}\n\n${link}` : link };
-};
+// Identical to the Mattermost postable: a plain markdown answer with the nao footer. Aliased rather
+// than copied so the footer (and its truncation budget) stays defined in one place.
+export const createDiscordAnswerMessage = createMattermostAnswerMessage;
 
 export const createTextBlock = (text: string): CardChild => {
 	const rendered = mdToMrkdwn(text);

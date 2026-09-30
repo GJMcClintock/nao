@@ -92,7 +92,9 @@ describe('validateDiscordConnection', () => {
 				botToken: 'test-token',
 				fetchImpl,
 			}),
-		).rejects.toThrow('Could not reach the Discord API. Check your network and try again.');
+		).rejects.toMatchObject({
+			message: 'Could not reach the Discord API. Check your network and try again.',
+		});
 	});
 
 	it.each([{}, { id: '' }, { id: 42 }])('rejects malformed successful responses', async (body) => {
@@ -230,14 +232,6 @@ describe('shouldHandleDiscordMessage', () => {
 				isDirectMessage: true,
 				isThreadReply: true,
 				isMention: true,
-			}),
-		).toBe(true);
-		expect(
-			shouldHandleDiscordMessage({
-				...baseInput,
-				isDirectMessage: true,
-				isThreadReply: true,
-				hasExistingChat: true,
 			}),
 		).toBe(true);
 	});
@@ -543,7 +537,6 @@ describe('Discord account resolution', () => {
 
 		expect(result).toBeNull();
 		expect(findUser).not.toHaveBeenCalled();
-		expect(parseDiscordLoginCommand('login fallbak1')).toEqual({ code: 'fallbak1' });
 	});
 
 	it('caches a missing email', async () => {

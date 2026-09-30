@@ -869,7 +869,7 @@ export const settingsSearchIndex: SettingsSearchEntry[] = [
 		pageLabel: 'Integrations & MCP',
 		section: 'Discord',
 		title: 'Link manually',
-		description: 'Accounts link by email; send login <code> to the bot if yours does not link.',
+		description: 'Discord does not expose member emails; send login <code> to the bot to link your account.',
 		keywords: ['link', 'login', 'discord', 'email'],
 	},
 
