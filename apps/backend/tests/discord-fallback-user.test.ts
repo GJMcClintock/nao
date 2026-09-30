@@ -1,6 +1,6 @@
 import '../src/env';
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import s from '../src/db/abstractSchema';
 import { db } from '../src/db/db';
@@ -35,6 +35,12 @@ const FALLBACK_USER_ID = 'discord-fallback-user';
 const FALLBACK_EMAIL = 'nao-bot@example.com';
 
 describe('Discord fallback user', () => {
+	// The transaction spy below is installed inside one test; without this it would stay in place
+	// for every later test in the file.
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	beforeAll(async () => {
 		await db.insert(s.user).values({
 			id: FALLBACK_USER_ID,
@@ -86,8 +92,9 @@ describe('Discord fallback user', () => {
 			mentionRoleIds: ['role-1'],
 		});
 
-		// better-sqlite3 is synchronous and refuses an async transaction callback, so run the body
-		// directly: the logic under test is the read-modify-write of the settings blob, not the tx.
+		// better-sqlite3 (the test driver) is synchronous and refuses an async transaction callback,
+		// so run the body directly: the logic under test is the read-modify-write of the settings
+		// blob, not the tx. Production runs on Bun's sqlite driver, which does support the async form.
 		vi.spyOn(db, 'transaction').mockImplementation(((callback: (tx: typeof db) => Promise<unknown>) =>
 			callback(db)) as unknown as typeof db.transaction);
 

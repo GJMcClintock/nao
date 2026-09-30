@@ -1,4 +1,5 @@
 import type { DiscordAdapter } from '@chat-adapter/discord';
+import type { UserRole } from '@nao/shared/types';
 import type { AdapterPostableMessage } from 'chat';
 import { Card, CardText } from 'chat';
 
@@ -8,15 +9,20 @@ import { createStopButtonActions } from '../utils/messaging-provider';
 export const DISCORD_ANSWERING_PLACEHOLDER = '✨ nao is answering...';
 
 /**
+ * The roles the Discord bot answers for. The same predicate gates every inbound message and the
+ * fallback user at save time -- a fallback outside these roles would save fine and then be denied
+ * on every message, so the settings form has to reject it up front.
+ */
+export const canUseDiscordInProject = (role: UserRole | null | undefined): boolean =>
+	role === 'admin' || role === 'user' || role === 'context_admin';
+
+/**
  * The Discord answer postable. Deliberately always a Card, never a bare markdown postable: the adapter
  * writes `content` for markdown but leaves whatever embed and components a card wrote earlier in place,
  * so switching between the two mid-stream renders the same answer twice -- the markdown content plus the
  * card's stale embed, behind a Stop button that has already been detached.
  */
-export const buildDiscordAnswerPostable = (
-	message: string,
-	stopAttached: boolean,
-): AdapterPostableMessage =>
+export const buildDiscordAnswerPostable = (message: string, stopAttached: boolean): AdapterPostableMessage =>
 	Card({
 		children: [
 			CardText(message || DISCORD_ANSWERING_PLACEHOLDER),

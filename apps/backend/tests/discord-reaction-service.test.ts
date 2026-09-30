@@ -65,6 +65,7 @@ vi.mock('@chat-adapter/discord', () => ({
 	createDiscordAdapter: vi.fn(() => ({
 		addReaction: vi.fn(),
 		getUser: vi.fn(),
+		startGatewayListener: vi.fn(async () => new Response(null, { status: 200 })),
 	})),
 }));
 

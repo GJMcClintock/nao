@@ -4,14 +4,7 @@ import { stripAssistantTags } from '@nao/shared';
 import { isQueryResultPart, type QueryResultPartType } from '@nao/shared/execute-sql-parts';
 import { displayChart } from '@nao/shared/tools';
 import { InferUIMessageChunk, readUIMessageStream } from 'ai';
-import {
-	type AdapterPostableMessage,
-	Chat,
-	type Logger as ChatLogger,
-	Message,
-	type SentMessage,
-	Thread,
-} from 'chat';
+import { type AdapterPostableMessage, Chat, type Logger as ChatLogger, Message, type SentMessage, Thread } from 'chat';
 
 import { generateChartImage } from '../components/generate-chart';
 import type { User } from '../db/abstractSchema';
@@ -20,6 +13,7 @@ import * as executeSqlQueries from '../queries/execute-sql.queries';
 import * as feedbackQueries from '../queries/feedback.queries';
 import * as projectQueries from '../queries/project.queries';
 import { type DiscordConfig, listProjectsWithDiscordEnabled } from '../queries/project-discord-config.queries';
+import * as discordLinkQueries from '../queries/project-discord-link.queries';
 import { getUser, getUserByMessagingProviderCode } from '../queries/user.queries';
 import { UIChat, UIMessage, UIMessagePart } from '../types/chat';
 import { ConversationContext, StreamState, ToolCallEntry } from '../types/messaging-provider';
@@ -38,6 +32,7 @@ import { agentService } from './agent';
 import {
 	buildDiscordAnswerPostable,
 	cacheDiscordEmail,
+	canUseDiscordInProject,
 	createDiscordMarkdownTable,
 	DISCORD_POST_MAX_LENGTH,
 	DISCORD_THUMBS_DOWN,
@@ -127,25 +122,52 @@ class ProjectDiscordBot {
 	 * adapter processes messages in-process rather than forwarding them to an HTTP endpoint.
 	 */
 	private async _startGatewayListener(): Promise<void> {
-		this._gatewayAbort = new AbortController();
+		const abort = new AbortController();
+		this._gatewayAbort = abort;
 		const response = await this._adapter.startGatewayListener(
 			{
 				waitUntil: (task: Promise<unknown>) => {
-					void task.catch((error: unknown) => {
-						logger.error(`Discord gateway listener stopped: ${String(error)}`, {
-							source: 'system',
-							projectId: this._config.projectId,
-						});
-					});
+					void task.then(
+						() => this._restartGatewayListener(abort),
+						(error: unknown) => {
+							logger.error(`Discord gateway listener stopped: ${String(error)}`, {
+								source: 'system',
+								projectId: this._config.projectId,
+							});
+						},
+					);
 				},
 			},
 			GATEWAY_LISTENER_DURATION_MS,
-			this._gatewayAbort.signal,
+			abort.signal,
 		);
 		if (!response.ok) {
 			throw new Error(
 				`Could not start the Discord gateway listener: ${response.status} ${await response.text()}`,
 			);
+		}
+	}
+
+	/**
+	 * The adapter listens for its duration argument and then returns, so the listener has to be
+	 * started again when it ends. Without this the bot stays in _bots looking healthy while every
+	 * plain message is dropped, because only a config change or a process restart would start it.
+	 */
+	private async _restartGatewayListener(previous: AbortController): Promise<void> {
+		if (this._gatewayAbort !== previous || previous.signal.aborted) {
+			return;
+		}
+		logger.warn('Discord gateway listener ended; restarting it', {
+			source: 'system',
+			projectId: this._config.projectId,
+		});
+		try {
+			await this._startGatewayListener();
+		} catch (error) {
+			logger.error(`Could not restart the Discord gateway listener: ${String(error)}`, {
+				source: 'system',
+				projectId: this._config.projectId,
+			});
 		}
 	}
 
@@ -301,6 +323,11 @@ class ProjectDiscordBot {
 			return;
 		}
 
+		await discordLinkQueries.upsertLinkedDiscordUser({
+			projectId: this._config.projectId,
+			discordUserId: discordId,
+			userId: user.id,
+		});
 		cacheDiscordEmail(this._emailByDiscordId, discordId, user.email);
 		await thread.post(`✅ Linked to ${user.email}. You can now send messages to nao!`);
 	}
@@ -344,6 +371,16 @@ class ProjectDiscordBot {
 			return null;
 		}
 		try {
+			// The persisted link first: it is the only thing that survives a bot restart, since
+			// Discord cannot supply the member's email a second time.
+			const link = await discordLinkQueries.getLinkedDiscordUser(this._config.projectId, discordId);
+			if (link) {
+				const linkedUser = await getUser({ id: link.userId });
+				if (linkedUser) {
+					cacheDiscordEmail(this._emailByDiscordId, discordId, linkedUser.email);
+					return linkedUser;
+				}
+			}
 			return await resolveDiscordAccount({
 				userId: discordId,
 				emailCache: this._emailByDiscordId,
@@ -361,7 +398,7 @@ class ProjectDiscordBot {
 
 	private async _checkUserBelongsToProject(ctx: DiscordConversationContext): Promise<void> {
 		const role = await projectQueries.getUserRoleInProject(this._config.projectId, ctx.user!.id);
-		if (role !== 'admin' && role !== 'user' && role !== 'context_admin') {
+		if (!canUseDiscordInProject(role)) {
 			await ctx.thread.post(
 				"❌ You don't have permission to use nao in this project. Please contact an administrator.",
 			);

@@ -18,6 +18,7 @@ import * as crQueries from '../queries/context-recommendation.queries';
 import * as mcpEndpointQueries from '../queries/mcp-endpoint.queries';
 import * as projectQueries from '../queries/project.queries';
 import * as discordConfigQueries from '../queries/project-discord-config.queries';
+import * as discordLinkQueries from '../queries/project-discord-link.queries';
 import * as llmConfigQueries from '../queries/project-llm-config.queries';
 import * as mattermostConfigQueries from '../queries/project-mattermost-config.queries';
 import * as savedPromptQueries from '../queries/project-saved-prompt.queries';
@@ -36,7 +37,7 @@ import {
 	updateIntegrationModel,
 } from '../services/default-models.service';
 import { discordService } from '../services/discord';
-import { DiscordConnectionError, validateDiscordConnection } from '../services/discord-helpers';
+import { canUseDiscordInProject, DiscordConnectionError, validateDiscordConnection } from '../services/discord-helpers';
 import { mattermostService } from '../services/mattermost';
 import { MattermostConnectionError, validateMattermostConnection } from '../services/mattermost-helpers';
 import { mcpService } from '../services/mcp';
@@ -708,9 +709,12 @@ export const projectRoutes = {
 	upsertDiscordConfig: adminProtectedProcedure
 		.input(
 			z.object({
-				botToken: z.string().min(1),
-				applicationId: z.string().min(1),
-				publicKey: z.string().min(1),
+				botToken: z.string().trim().min(1),
+				applicationId: z.string().trim().min(1),
+				publicKey: z
+					.string()
+					.trim()
+					.regex(/^[0-9a-f]{64}$/i, 'Enter the 64-character hex public key from the Discord application.'),
 				modelProvider: llmProviderSchema.optional(),
 				modelId: z.string().optional(),
 				mentionRoleIds: z.array(z.string()).optional(),
@@ -734,10 +738,15 @@ export const projectRoutes = {
 
 			const fallbackUserEmail = input.fallbackUserEmail || undefined;
 			const fallbackUser = fallbackUserEmail ? await userQueries.getUserByEmail(fallbackUserEmail) : null;
-			if (fallbackUserEmail && !fallbackUser) {
+			const fallbackUserRole = fallbackUser
+				? await projectQueries.getUserRoleInProject(ctx.project.id, fallbackUser.id)
+				: null;
+			if (fallbackUserEmail && !canUseDiscordInProject(fallbackUserRole)) {
 				throw new TRPCError({
 					code: 'BAD_REQUEST',
-					message: `No user found with the email ${fallbackUserEmail}.`,
+					message: fallbackUser
+						? `${fallbackUserEmail} does not have access to this project.`
+						: `No user found with the email ${fallbackUserEmail}.`,
 				});
 			}
 
@@ -799,6 +808,7 @@ export const projectRoutes = {
 
 	deleteDiscordConfig: adminProtectedProcedure.mutation(async ({ ctx }) => {
 		await discordConfigQueries.deleteProjectDiscordConfig(ctx.project.id);
+		await discordLinkQueries.deleteLinkedDiscordUsers(ctx.project.id);
 		await discordService.stopProject(ctx.project.id);
 		return { success: true };
 	}),
