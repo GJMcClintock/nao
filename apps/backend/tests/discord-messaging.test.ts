@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { generateChartImage } from '../src/components/generate-chart';
 import {
 	cacheDiscordEmail,
+	canUseDiscordInProject,
 	createDiscordMarkdownTable,
 	DISCORD_TABLE_ROW_LIMIT,
 	type DiscordEmailCacheEntry,
@@ -27,6 +28,18 @@ vi.mock('../src/utils/logger', () => ({
 		debug: vi.fn(),
 	},
 }));
+
+describe('canUseDiscordInProject', () => {
+	// Gates both every inbound message and the links/fallback a settings save accepts, so widening
+	// or narrowing it changes who the bot answers for.
+	it.each(['admin', 'user', 'context_admin'] as const)('answers for %s', (role) => {
+		expect(canUseDiscordInProject(role)).toBe(true);
+	});
+
+	it.each(['viewer', null, undefined] as const)('refuses %s', (role) => {
+		expect(canUseDiscordInProject(role)).toBe(false);
+	});
+});
 
 describe('validateDiscordConnection', () => {
 	it('accepts a valid Discord bot user response', async () => {

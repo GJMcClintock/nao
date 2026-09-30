@@ -56,6 +56,9 @@ const UPDATE_INTERVAL_MS = 200;
 /** Node clamps setTimeout delays above 2^31-1 to 1ms, so this is the longest "run until stopped". */
 const GATEWAY_LISTENER_DURATION_MS = 2_147_483_647;
 
+/** Delay before starting the listener again after a failed restart. */
+const GATEWAY_RESTART_RETRY_MS = 30_000;
+
 type DiscordConversationContext = Omit<ConversationContext, 'blocks' | 'textBlockIndex'> & {
 	answerTextPartIndex: number;
 	bodyParts: string[];
@@ -75,6 +78,7 @@ class ProjectDiscordBot {
 	private readonly _answerPostMutations = new Map<string, Promise<void>>();
 	private readonly _answerPostStates = new Map<string, DiscordAnswerMessageState>();
 	private _gatewayAbort: AbortController | null = null;
+	private _gatewayRetryTimer: NodeJS.Timeout | null = null;
 
 	constructor(private readonly _config: DiscordConfig) {
 		this._adapter = createDiscordAdapter({
@@ -111,6 +115,10 @@ class ProjectDiscordBot {
 		// requests, but a plain message only ever arrives over the gateway.
 		this._gatewayAbort?.abort();
 		this._gatewayAbort = null;
+		if (this._gatewayRetryTimer) {
+			clearTimeout(this._gatewayRetryTimer);
+			this._gatewayRetryTimer = null;
+		}
 		this._answerPostStates.clear();
 		this._answerPostMutations.clear();
 	}
@@ -168,7 +176,26 @@ class ProjectDiscordBot {
 				source: 'system',
 				projectId: this._config.projectId,
 			});
+			this._scheduleGatewayRestart();
 		}
+	}
+
+	/**
+	 * ponytail: a fixed cadence, not backoff -- each attempt is a single API call and a start that
+	 * fails is usually the network, not rate limiting. The stop path clears the timer; move to
+	 * backoff if Discord ever starts rejecting the start call.
+	 */
+	private _scheduleGatewayRestart(): void {
+		const abort = this._gatewayAbort;
+		if (this._gatewayRetryTimer || !abort || abort.signal.aborted) {
+			return;
+		}
+		this._gatewayRetryTimer = setTimeout(() => {
+			this._gatewayRetryTimer = null;
+			void this._restartGatewayListener(abort);
+		}, GATEWAY_RESTART_RETRY_MS);
+		// Never hold the process open for a retry.
+		this._gatewayRetryTimer.unref?.();
 	}
 
 	private _registerHandlers(): void {
@@ -320,6 +347,15 @@ class ProjectDiscordBot {
 		const user = await getUserByMessagingProviderCode(code);
 		if (!user) {
 			await thread.post('❌ Invalid linking code. Check your code in the project settings.');
+			return;
+		}
+
+		// A code proves the account, not that it belongs in this project. Linking a user who cannot
+		// use it here would deny every message afterwards, and the author cannot relink because the
+		// parser ignores `login` from an already-linked Discord user.
+		const role = await projectQueries.getUserRoleInProject(this._config.projectId, user.id);
+		if (!canUseDiscordInProject(role)) {
+			await thread.post('❌ That nao account does not have access to this project. Ask an administrator.');
 			return;
 		}
 
