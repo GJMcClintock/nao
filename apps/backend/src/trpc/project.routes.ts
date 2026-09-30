@@ -824,8 +824,10 @@ export const projectRoutes = {
 
 	deleteDiscordConfig: adminProtectedProcedure.mutation(async ({ ctx }) => {
 		await discordConfigQueries.deleteProjectDiscordConfig(ctx.project.id);
-		await discordLinkQueries.deleteLinkedDiscordUsers(ctx.project.id);
+		// Stop first: the gateway is still delivering messages until it is stopped, and a `login`
+		// that arrives in that window would write a link back after the cleanup below.
 		await discordService.stopProject(ctx.project.id);
+		await discordLinkQueries.deleteLinkedDiscordUsers(ctx.project.id);
 		return { success: true };
 	}),
 
