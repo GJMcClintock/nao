@@ -22,6 +22,8 @@ export const upsertProjectDiscordConfig = async (data: {
 	modelId?: string;
 	mentionRoleIds?: string[];
 	respondToChannelIds?: string[];
+	fallbackUserId?: string;
+	fallbackUserEmail?: string;
 }): Promise<DiscordConfig> => {
 	const updated = await takeFirstOrThrow(
 		db
@@ -35,6 +37,8 @@ export const upsertProjectDiscordConfig = async (data: {
 					discordLlmModelId: data.modelId ?? '',
 					discordMentionRoleIds: data.mentionRoleIds,
 					discordRespondToChannelIds: data.respondToChannelIds,
+					discordFallbackUserId: data.fallbackUserId,
+					discordFallbackUserEmail: data.fallbackUserEmail,
 				},
 			})
 			.where(eq(s.project.id, data.projectId))
@@ -73,6 +77,8 @@ export const updateProjectDiscordModel = async (
 					discordLlmModelId: modelId ?? '',
 					discordMentionRoleIds: existing?.discordMentionRoleIds,
 					discordRespondToChannelIds: existing?.discordRespondToChannelIds,
+					discordFallbackUserId: existing?.discordFallbackUserId,
+					discordFallbackUserEmail: existing?.discordFallbackUserEmail,
 				},
 			})
 			.where(eq(s.project.id, projectId))
@@ -105,6 +111,8 @@ function toDiscordConfig(projectId: string, settings: DiscordSettings | null | u
 		modelSelection: toLlmSelectedModel(settings.discordLlmProvider, settings.discordLlmModelId),
 		mentionRoleIds: settings.discordMentionRoleIds,
 		respondToChannelIds: settings.discordRespondToChannelIds,
+		fallbackUserId: settings.discordFallbackUserId,
+		fallbackUserEmail: settings.discordFallbackUserEmail,
 	};
 }
 
@@ -128,4 +136,6 @@ export interface DiscordConfig {
 	modelSelection?: LlmSelectedModel;
 	mentionRoleIds?: string[];
 	respondToChannelIds?: string[];
+	fallbackUserId?: string;
+	fallbackUserEmail?: string;
 }

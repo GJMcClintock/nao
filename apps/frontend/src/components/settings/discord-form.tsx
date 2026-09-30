@@ -11,6 +11,7 @@ export interface DiscordFormValues {
 	publicKey: string;
 	mentionRoleIds: string;
 	respondToChannelIds: string;
+	fallbackUserEmail: string;
 }
 
 export interface DiscordFormProps {
@@ -19,6 +20,7 @@ export interface DiscordFormProps {
 	initialPublicKey: string;
 	initialMentionRoleIds: string;
 	initialRespondToChannelIds: string;
+	initialFallbackUserEmail: string;
 	onSubmit: (values: DiscordFormValues) => Promise<void>;
 	onCancel: () => void;
 	isPending: boolean;
@@ -30,6 +32,7 @@ export function DiscordForm({
 	initialPublicKey,
 	initialMentionRoleIds,
 	initialRespondToChannelIds,
+	initialFallbackUserEmail,
 	onSubmit,
 	onCancel,
 	isPending,
@@ -42,6 +45,7 @@ export function DiscordForm({
 			publicKey: initialPublicKey,
 			mentionRoleIds: initialMentionRoleIds,
 			respondToChannelIds: initialRespondToChannelIds,
+			fallbackUserEmail: initialFallbackUserEmail,
 		},
 		onSubmit: async ({ value }) => {
 			setSubmitError(undefined);
@@ -84,7 +88,8 @@ export function DiscordForm({
 						<span>
 							{' '}
 							Discord interactions are delivered to this nao instance and verified with the application
-							public key. People are linked automatically using their Discord account.
+							public key. Discord does not expose member emails, so each member links once by sending
+							`login &lt;code&gt;` to the bot -- or set a fallback user below.
 						</span>
 					</p>
 					<PasswordField
@@ -122,6 +127,20 @@ export function DiscordForm({
 						placeholder='123456789012345678, 987654321098765432'
 						hint='optional'
 					/>
+					<TextField
+						form={form}
+						name='fallbackUserEmail'
+						label='Fallback user email (community servers)'
+						placeholder='nao-bot@example.com'
+						hint='optional'
+					/>
+					<p className='text-[11px] text-muted-foreground leading-relaxed -mt-2'>
+						Discord-specific. Discord does not give bots member emails, so nobody can link automatically and
+						each member must send their linking code once. On a community server where that is not
+						practical, name one nao user here: every message from an unlinked member is then answered as
+						that user. Answers, history and feedback all belong to them, and anyone able to mention the bot
+						can reach whatever that user can see -- so use a dedicated account, not your own.
+					</p>
 				</div>
 
 				{submitError && <ErrorMessage message={submitError} />}

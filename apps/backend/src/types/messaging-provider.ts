@@ -92,6 +92,11 @@ export type DiscordSettings = {
 	discordLlmModelId: string;
 	discordMentionRoleIds?: string[];
 	discordRespondToChannelIds?: string[];
+	// Community servers: Discord never exposes member emails, so no member can auto-link. When set,
+	// messages from unlinked members are answered as this one user instead of being rejected.
+	// The email is kept alongside the id purely so the settings form can round-trip the value.
+	discordFallbackUserId?: string;
+	discordFallbackUserEmail?: string;
 };
 
 export type WhatsappSettings = {
