@@ -630,7 +630,13 @@ class ProjectDiscordBot {
 			return false;
 		}
 		try {
-			await ctx.thread.post({ markdown: '', files: [attachment] });
+			// Captioned, not bare: the "attached below" notice is a separate edit that can fail, and a
+			// bare answer.md under a post still saying "open the full result in nao" reads as a stray
+			// file. The caption has to stand on its own.
+			await ctx.thread.post({
+				markdown: "📄 **The full answer** — the post above was truncated to fit Discord's limit.",
+				files: [attachment],
+			});
 			return true;
 		} catch (error) {
 			logger.warn(`Failed to upload the full Discord answer: ${String(error)}`, {
