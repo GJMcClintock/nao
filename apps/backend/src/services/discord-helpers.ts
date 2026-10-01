@@ -1,12 +1,20 @@
 import type { DiscordAdapter } from '@chat-adapter/discord';
 import type { UserRole } from '@nao/shared/types';
 import type { AdapterPostableMessage } from 'chat';
-import { Card, CardText } from 'chat';
+import { Card, CardText, type FileUpload } from 'chat';
 
 import type { SqlOutput } from '../types/messaging-provider';
 import { createStopButtonActions } from '../utils/messaging-provider';
 
 export const DISCORD_ANSWERING_PLACEHOLDER = '✨ nao is answering...';
+
+/**
+ * The answer post carries Discord's message-content limit, so a longer answer is uploaded whole. The
+ * name is deliberate: the body is markdown, and Discord previews `.md` as text.
+ */
+export const DISCORD_OVERFLOW_FILENAME = 'answer.md';
+export const DISCORD_TRUNCATION_NOTICE = '\n\n_Response truncated. Open the full result in nao._';
+export const DISCORD_ATTACHMENT_NOTICE = '\n\n_Response truncated. The full answer is attached below._';
 
 /**
  * The roles the Discord bot answers for. The same predicate gates every inbound message and the
@@ -203,16 +211,36 @@ export function createDiscordMarkdownTable(input: {
 		.trim();
 }
 
-export function truncateDiscordMarkdown(markdown: string, maxLength = DISCORD_POST_MAX_LENGTH): string {
+export function truncateDiscordMarkdown(
+	markdown: string,
+	maxLength = DISCORD_POST_MAX_LENGTH,
+	notice = DISCORD_TRUNCATION_NOTICE,
+): string {
 	if (markdown.length <= maxLength) {
 		return markdown;
 	}
-	const notice = '\n\n_Response truncated. Open the full result in nao._';
 	const available = Math.max(maxLength - notice.length, 0);
 	const prefix = markdown.slice(0, available);
 	const lastLineBreak = prefix.lastIndexOf('\n');
 	const safePrefix = prefix.slice(0, lastLineBreak > 0 ? lastLineBreak : available).trimEnd();
 	return `${safePrefix}${notice}`.slice(0, maxLength);
+}
+
+/**
+ * The answer as an upload, or null when it already fits one post. The trigger IS the length check that
+ * truncates the post, so the file carries exactly what the message could not: no size heuristic and no
+ * per-project setting to keep in sync. Bounded in practice by the table caps (~12k characters); Discord
+ * allows a bot 10 MiB per file.
+ */
+export function createDiscordAnswerAttachment(body: string, maxLength = DISCORD_POST_MAX_LENGTH): FileUpload | null {
+	if (body.length <= maxLength) {
+		return null;
+	}
+	return {
+		data: Buffer.from(body, 'utf8'),
+		filename: DISCORD_OVERFLOW_FILENAME,
+		mimeType: 'text/markdown',
+	};
 }
 
 export async function resolveDiscordAccount<T>(input: {
