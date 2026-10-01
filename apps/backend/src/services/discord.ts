@@ -33,7 +33,9 @@ import {
 	buildDiscordAnswerPostable,
 	cacheDiscordEmail,
 	canUseDiscordInProject,
+	createDiscordAnswerAttachment,
 	createDiscordMarkdownTable,
+	DISCORD_ATTACHMENT_NOTICE,
 	DISCORD_POST_MAX_LENGTH,
 	DISCORD_THUMBS_DOWN,
 	DISCORD_THUMBS_UP,
@@ -482,7 +484,8 @@ class ProjectDiscordBot {
 			await this._readStreamAndUpdateMessage(stream, ctx);
 
 			const chatUrl = new URL(ctx.chatId, this._config.redirectUrl).toString();
-			await this._editAnswerMessageFailSoft(ctx, chatUrl);
+			const overflowAttached = await this._attachAnswerOverflow(ctx, chatUrl);
+			await this._editAnswerMessageFailSoft(ctx, chatUrl, overflowAttached);
 			if (answerPostId) {
 				await this._setStopAttachment(answerPostId, false);
 			}
@@ -566,27 +569,71 @@ class ProjectDiscordBot {
 		return { ...state, lastMessage };
 	}
 
-	private async _editAnswerMessage(ctx: DiscordConversationContext, chatUrl?: string): Promise<void> {
+	private async _editAnswerMessage(
+		ctx: DiscordConversationContext,
+		chatUrl?: string,
+		overflowAttached = false,
+	): Promise<void> {
 		const answerMessage = ctx.convMessage;
 		if (!answerMessage) {
 			return;
 		}
 		// Community servers can drop the footer link: it points at a UI those members may not have access to.
 		const answerUrl = this._config.hideAnswerLink ? undefined : chatUrl;
-		const linkLength = answerUrl ? createDiscordAnswerMessage('', answerUrl).markdown.length + 2 : 0;
-		const body = truncateDiscordMarkdown(this._renderBody(ctx), Math.max(DISCORD_POST_MAX_LENGTH - linkLength, 0));
+		const body = truncateDiscordMarkdown(
+			this._renderBody(ctx),
+			this._answerPostBudget(answerUrl),
+			overflowAttached ? DISCORD_ATTACHMENT_NOTICE : undefined,
+		);
 		const message = createDiscordAnswerMessage(body, answerUrl).markdown;
 		await this._patchAnswerPost(answerMessage.id, (state) => {
 			state.message = message;
 		});
 	}
 
-	private async _editAnswerMessageFailSoft(ctx: DiscordConversationContext, chatUrl?: string): Promise<boolean> {
+	private async _editAnswerMessageFailSoft(
+		ctx: DiscordConversationContext,
+		chatUrl?: string,
+		overflowAttached = false,
+	): Promise<boolean> {
 		try {
-			await this._editAnswerMessage(ctx, chatUrl);
+			await this._editAnswerMessage(ctx, chatUrl, overflowAttached);
 			return true;
 		} catch (error) {
 			logger.warn(`Failed to update Discord answer message: ${String(error)}`, {
+				source: 'system',
+				projectId: this._config.projectId,
+			});
+			return false;
+		}
+	}
+
+	/** What the answer post holds: Discord's content cap minus the footer link it has to carry. */
+	private _answerPostBudget(answerUrl: string | undefined): number {
+		const linkLength = answerUrl ? createDiscordAnswerMessage('', answerUrl).markdown.length + 2 : 0;
+		return Math.max(DISCORD_POST_MAX_LENGTH - linkLength, 0);
+	}
+
+	/**
+	 * Uploads the whole answer when the post had to truncate it. Called ONCE, after the stream ends --
+	 * the streaming edits would otherwise post a fresh copy on every tool tick. Fail-soft: the post
+	 * already carries the nao link, so a failed upload costs the reader nothing beyond today's output.
+	 */
+	private async _attachAnswerOverflow(ctx: DiscordConversationContext, chatUrl?: string): Promise<boolean> {
+		// No answer post means the body is not on screen either; a bare file would be the only trace.
+		if (!ctx.convMessage) {
+			return false;
+		}
+		const answerUrl = this._config.hideAnswerLink ? undefined : chatUrl;
+		const attachment = createDiscordAnswerAttachment(this._renderBody(ctx), this._answerPostBudget(answerUrl));
+		if (!attachment) {
+			return false;
+		}
+		try {
+			await ctx.thread.post({ markdown: '', files: [attachment] });
+			return true;
+		} catch (error) {
+			logger.warn(`Failed to upload the full Discord answer: ${String(error)}`, {
 				source: 'system',
 				projectId: this._config.projectId,
 			});

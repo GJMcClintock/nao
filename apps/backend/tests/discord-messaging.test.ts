@@ -4,7 +4,11 @@ import { generateChartImage } from '../src/components/generate-chart';
 import {
 	cacheDiscordEmail,
 	canUseDiscordInProject,
+	createDiscordAnswerAttachment,
 	createDiscordMarkdownTable,
+	DISCORD_ATTACHMENT_NOTICE,
+	DISCORD_OVERFLOW_FILENAME,
+	DISCORD_POST_MAX_LENGTH,
 	DISCORD_TABLE_ROW_LIMIT,
 	type DiscordEmailCacheEntry,
 	getDiscordLoginCommandForUnlinkedUser,
@@ -411,6 +415,25 @@ describe('createDiscordMarkdownTable', () => {
 
 		expect(truncated.length).toBeLessThanOrEqual(100);
 		expect(truncated).toContain('Response truncated. Open the full result in nao.');
+	});
+
+	it('uploads the answer only when it did not fit one post', () => {
+		expect(createDiscordAnswerAttachment('x'.repeat(DISCORD_POST_MAX_LENGTH))).toBeNull();
+
+		const body = 'x'.repeat(DISCORD_POST_MAX_LENGTH + 1);
+		const attachment = createDiscordAnswerAttachment(body);
+
+		expect(attachment?.filename).toBe(DISCORD_OVERFLOW_FILENAME);
+		expect(attachment?.mimeType).toBe('text/markdown');
+		expect(attachment?.data.toString('utf8')).toBe(body);
+	});
+
+	it('points at the attachment, not nao, when the answer was uploaded', () => {
+		const truncated = truncateDiscordMarkdown('A line of output\n'.repeat(200), 100, DISCORD_ATTACHMENT_NOTICE);
+
+		expect(truncated.length).toBeLessThanOrEqual(100);
+		expect(truncated).toContain('The full answer is attached below.');
+		expect(truncated).not.toContain('Open the full result in nao');
 	});
 });
 
