@@ -13,6 +13,11 @@ export type ProjectMessagingSettingsKey =
 	| 'mattermostSettings'
 	| 'whatsappSettings';
 
+const lockForUpdate = <Query extends { execute(): unknown }>(query: Query): Query =>
+	dbConfig.dialect === Dialect.Postgres ? (query as Query & Lockable<Query>).for('update') : query;
+
+type Lockable<Query> = { for(strength: 'update'): Query };
+
 /**
  * Rebuilds one of a project's messaging settings blobs in a transaction and returns the updated row,
  * or the row unchanged when `build` returns `undefined`.
@@ -36,20 +41,17 @@ export const updateProjectSettings = async <K extends ProjectMessagingSettingsKe
 		if (dbConfig.dialect === Dialect.Postgres) {
 			return (async () => {
 				const project = await takeFirstOrThrow(
-					tx.select().from(s.project).where(eq(s.project.id, projectId)).execute(),
+					lockForUpdate(tx.select().from(s.project).where(eq(s.project.id, projectId))).execute(),
 					`Project not found: ${projectId}`,
 				);
 				const values = updateValues(project);
 				if (!values) {
 					return project;
 				}
-				const [updated] = await tx
-					.update(s.project)
-					.set(values)
-					.where(eq(s.project.id, projectId))
-					.returning()
-					.execute();
-				return updated ?? project;
+				return takeFirstOrThrow(
+					tx.update(s.project).set(values).where(eq(s.project.id, projectId)).returning().execute(),
+					`Project not found: ${projectId}`,
+				);
 			})();
 		}
 
