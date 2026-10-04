@@ -732,6 +732,32 @@ export const getLastAssistantMessageId = async (chatId: string): Promise<string 
 	return result?.id ?? null;
 };
 
+export const attachDiscordMessageId = async (messageId: string, discordMessageId: string): Promise<void> => {
+	await db.update(s.chatMessage).set({ discordMessageId }).where(eq(s.chatMessage.id, messageId)).execute();
+};
+
+/** Discord feedback reactions arrive with the reacted message id, so resolve the answer it belongs to. */
+export const getAssistantMessageIdByDiscordMessage = async (
+	discordMessageId: string,
+	projectId: string,
+): Promise<string | null> => {
+	const [result] = await db
+		.select({ id: s.chatMessage.id })
+		.from(s.chatMessage)
+		.innerJoin(s.chat, eq(s.chatMessage.chatId, s.chat.id))
+		.where(
+			and(
+				eq(s.chatMessage.discordMessageId, discordMessageId),
+				eq(s.chatMessage.role, 'assistant'),
+				isNull(s.chatMessage.supersededAt),
+				eq(s.chat.projectId, projectId),
+			),
+		)
+		.limit(1)
+		.execute();
+	return result?.id ?? null;
+};
+
 export const isAssistantMessageInProject = async (messageId: string, projectId: string): Promise<boolean> => {
 	const [result] = await db
 		.select({ id: s.chatMessage.id })
