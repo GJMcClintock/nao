@@ -7,6 +7,14 @@ import s from '../src/db/abstractSchema';
 import { db } from '../src/db/db';
 import { updateProjectSettings } from '../src/queries/project-settings.queries';
 
+// The query picks its transaction shape from `dbConfig.dialect`, so pin the dialect to SQLite
+// here — otherwise a runner with `DB_URI=postgres://…` takes the async path against the
+// better-sqlite3 mock below and fails with "Transaction function cannot return a promise".
+vi.mock('../src/db/dbConfig', async (importOriginal) => {
+	const mod = await importOriginal<typeof import('../src/db/dbConfig')>();
+	return { ...mod, default: { ...mod.default, dialect: mod.Dialect.Sqlite } };
+});
+
 vi.mock('../src/db/db', async () => {
 	const { default: Database } = await import('better-sqlite3');
 	const { drizzle } = await import('drizzle-orm/better-sqlite3');
