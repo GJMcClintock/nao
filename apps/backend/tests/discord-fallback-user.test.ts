@@ -1,6 +1,6 @@
 import '../src/env';
 
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import s from '../src/db/abstractSchema';
 import { db } from '../src/db/db';
@@ -10,6 +10,14 @@ import {
 	upsertProjectDiscordConfig,
 } from '../src/queries/project-discord-config.queries';
 import { getUserByEmail } from '../src/queries/user.queries';
+
+// `updateProjectDiscordModel` picks its transaction shape from `dbConfig.dialect`, so pin the
+// dialect to SQLite here: a runner with `DB_URI=postgres://…` would otherwise take the async path
+// against the better-sqlite3 mock below and fail with "Transaction function cannot return a promise".
+vi.mock('../src/db/dbConfig', async (importOriginal) => {
+	const mod = await importOriginal<typeof import('../src/db/dbConfig')>();
+	return { ...mod, default: { ...mod.default, dialect: mod.Dialect.Sqlite } };
+});
 
 vi.mock('../src/db/db', async () => {
 	const { default: Database } = await import('better-sqlite3');
@@ -35,12 +43,6 @@ const FALLBACK_USER_ID = 'discord-fallback-user';
 const FALLBACK_EMAIL = 'nao-bot@example.com';
 
 describe('Discord fallback user', () => {
-	// The transaction spy below is installed inside one test; without this it would stay in place
-	// for every later test in the file.
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
 	beforeAll(async () => {
 		await db.insert(s.user).values({
 			id: FALLBACK_USER_ID,
