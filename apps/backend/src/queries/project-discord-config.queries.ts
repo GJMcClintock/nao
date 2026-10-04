@@ -9,6 +9,11 @@ import { llmProviderSchema } from '../types/llm';
 import type { DiscordSettings } from '../types/messaging-provider';
 import { takeFirstOrThrow } from '../utils/queries';
 
+const lockForUpdate = <Query extends { execute(): unknown }>(query: Query): Query =>
+	dbConfig.dialect === Dialect.Postgres ? (query as Query & Lockable<Query>).for('update') : query;
+
+type Lockable<Query> = { for(strength: 'update'): Query };
+
 export const getProjectDiscordConfig = async (projectId: string): Promise<DiscordConfig | null> => {
 	const [project] = await db.select().from(s.project).where(eq(s.project.id, projectId)).execute();
 	return project ? toDiscordConfig(project.id, project.discordSettings) : null;
@@ -82,7 +87,7 @@ export const updateProjectDiscordModel = async (
 		if (dbConfig.dialect === Dialect.Postgres) {
 			return (async () => {
 				const project = await takeFirstOrThrow(
-					tx.select().from(s.project).where(eq(s.project.id, projectId)).execute(),
+					lockForUpdate(tx.select().from(s.project).where(eq(s.project.id, projectId))).execute(),
 					`Project not found: ${projectId}`,
 				);
 				await tx
