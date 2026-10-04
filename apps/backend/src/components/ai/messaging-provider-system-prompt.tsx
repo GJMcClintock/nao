@@ -24,8 +24,8 @@ export function MessagingProviderSystemPrompt({
 				</ProviderFormattingPrompt>
 			) : provider === 'discord' ? (
 				<ProviderFormattingPrompt provider='Discord'>
-					Discord renders standard Markdown: bold, italics, inline code, fenced code blocks and links. It has
-					no table syntax, so prefer short bulleted lists over tables.
+					Discord renders standard Markdown: bold, italics, inline code and fenced code blocks. It does not
+					render [label](url) links or tables, so paste bare URLs and prefer short bulleted lists.
 				</ProviderFormattingPrompt>
 			) : (
 				<DefaultSystemPrompt provider={provider} />

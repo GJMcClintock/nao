@@ -64,6 +64,8 @@ const GATEWAY_RESTART_RETRY_MS = 30_000;
 type DiscordConversationContext = Omit<ConversationContext, 'blocks' | 'textBlockIndex'> & {
 	answerTextPartIndex: number;
 	bodyParts: string[];
+	/** Persisted id of the assistant message this turn produced, once the stream settles. */
+	answerMessageId?: string;
 };
 
 type DiscordAnswerMessageState = {
@@ -226,7 +228,7 @@ class ProjectDiscordBot {
 				added: event.added,
 				emojiName: event.emoji.name,
 				isBot: event.user.isMe || event.user.isBot === true,
-				threadId: event.threadId,
+				postId: event.messageId,
 			});
 		});
 	}
@@ -292,6 +294,7 @@ class ProjectDiscordBot {
 			convMessage: null,
 			answerTextPartIndex: -1,
 			bodyParts: [],
+			answerMessageId: undefined,
 			textBlockCount: 0,
 			isNewChat: false,
 			modelId: undefined,
@@ -489,6 +492,7 @@ class ProjectDiscordBot {
 			if (answerPostId) {
 				await this._setStopAttachment(answerPostId, false);
 			}
+			await this._recordAnswerMessage(answerPostId, ctx.answerMessageId);
 			await this._seedFeedbackReactions(ctx);
 
 			posthog.capture(ctx.user!.id, PostHogEvent.MessageSent, {
@@ -566,6 +570,7 @@ class ProjectDiscordBot {
 		}
 
 		await this._sendFinalText(ctx);
+		ctx.answerMessageId = lastMessage?.id;
 		return { ...state, lastMessage };
 	}
 
@@ -956,29 +961,45 @@ class ProjectDiscordBot {
 		}
 	}
 
+	/**
+	 * Reactions can land on any answer in a Discord thread, so remember which assistant message a
+	 * posted answer carries instead of assuming the thread's newest one. Best effort: a failure here
+	 * must not fail the answer that has already been rendered.
+	 */
+	private async _recordAnswerMessage(
+		postId: string | undefined,
+		assistantMessageId: string | undefined,
+	): Promise<void> {
+		if (!postId || !assistantMessageId) {
+			return;
+		}
+		try {
+			await chatQueries.attachDiscordMessageId(assistantMessageId, postId);
+		} catch (error) {
+			logger.warn(`Could not persist the Discord feedback message link: ${String(error)}`, {
+				source: 'system',
+				projectId: this._config.projectId,
+				context: { postId, assistantMessageId },
+			});
+		}
+	}
+
 	private async _handleReactionFeedback(input: {
 		added: boolean;
 		emojiName: string;
 		isBot: boolean;
-		threadId: string;
+		postId: string;
 	}): Promise<void> {
 		const feedback = resolveDiscordReactionFeedback(input);
-		if (!feedback || !input.threadId) {
+		if (!feedback || !input.postId) {
 			return;
 		}
-		const chat = await chatQueries.getChatByDiscordThread(input.threadId);
-		if (!chat) {
-			logger.warn('Ignoring Discord feedback reaction because the thread has no chat', {
-				source: 'system',
-				projectId: this._config.projectId,
-			});
-			return;
-		}
-		const messageId = await chatQueries.getLastAssistantMessageId(chat.id);
+		const messageId = await chatQueries.getAssistantMessageIdByDiscordMessage(input.postId, this._config.projectId);
 		if (!messageId) {
-			logger.warn('Ignoring Discord feedback reaction because the assistant message is missing', {
+			logger.warn('Ignoring Discord feedback reaction because the message is not an answer in this project', {
 				source: 'system',
 				projectId: this._config.projectId,
+				context: { postId: input.postId },
 			});
 			return;
 		}

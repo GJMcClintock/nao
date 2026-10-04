@@ -11,7 +11,7 @@ import { discordService } from '../src/services/discord';
 type ReactionEventInput = {
 	added: boolean;
 	emoji: { name: string };
-	threadId: string;
+	messageId: string;
 	user: { isBot: boolean; isMe: boolean };
 };
 
@@ -93,7 +93,8 @@ vi.mock('../src/utils/logger', () => ({
 const PROJECT_ID = 'discord-reaction-project';
 const MESSAGE_ID = 'discord-reaction-message';
 const THREAD_ID = 'discord:guild-1:channel-1';
-const UNKNOWN_THREAD_ID = 'discord:guild-1:channel-unknown';
+const POST_ID = 'discord-answer-post';
+const UNKNOWN_POST_ID = 'discord-answer-unknown';
 const config: DiscordConfig = {
 	projectId: PROJECT_ID,
 	botToken: 'bot-token',
@@ -106,7 +107,7 @@ function reaction(input: Partial<ReactionEventInput> = {}): ReactionEventInput {
 	return {
 		added: true,
 		emoji: { name: 'thumbs_up' },
-		threadId: THREAD_ID,
+		messageId: POST_ID,
 		user: { isBot: false, isMe: false },
 		...input,
 	};
@@ -143,6 +144,7 @@ describe('Discord reaction service', () => {
 			id: MESSAGE_ID,
 			chatId: 'discord-reaction-chat',
 			role: 'assistant',
+			discordMessageId: POST_ID,
 		});
 		await discordService.startForProject(config);
 	});
@@ -157,7 +159,7 @@ describe('Discord reaction service', () => {
 		db.$client.close();
 	});
 
-	it('persists additions and removals on the last assistant message of the thread chat', async () => {
+	it('persists additions and removals on the reacted answer message', async () => {
 		await chatHarness.reactionHandlers.at(-1)!(reaction({ emoji: { name: 'thumbs_up' } }));
 		expect(await readVote()).toBe('up');
 
@@ -178,8 +180,8 @@ describe('Discord reaction service', () => {
 		expect(await readVote()).toBeNull();
 	});
 
-	it('ignores reactions for threads without a chat', async () => {
-		await chatHarness.reactionHandlers.at(-1)!(reaction({ threadId: UNKNOWN_THREAD_ID }));
+	it('ignores reactions for messages that are not project answers', async () => {
+		await chatHarness.reactionHandlers.at(-1)!(reaction({ messageId: UNKNOWN_POST_ID }));
 
 		expect(await readVote()).toBeNull();
 	});

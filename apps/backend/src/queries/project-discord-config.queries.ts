@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 
 import s from '../db/abstractSchema';
 import { db } from '../db/db';
+import dbConfig, { Dialect } from '../db/dbConfig';
 import { env } from '../env';
 import { llmProviderSchema } from '../types/llm';
 import type { DiscordSettings } from '../types/messaging-provider';
@@ -60,34 +61,47 @@ export const updateProjectDiscordModel = async (
 	projectId: string,
 	modelProvider: LlmProvider | null,
 	modelId: string | null,
-): Promise<void> => {
-	await db.transaction(async (tx) => {
-		const project = await takeFirstOrThrow(
-			tx.select().from(s.project).where(eq(s.project.id, projectId)).execute(),
-			`Project not found: ${projectId}`,
-		);
-		const existing = project.discordSettings;
+): Promise<void> =>
+	db.transaction((tx) => {
+		const applyModel = (existing: DiscordSettings | null | undefined): DiscordSettings => ({
+			discordBotToken: existing?.discordBotToken ?? '',
+			discordApplicationId: existing?.discordApplicationId ?? '',
+			discordPublicKey: existing?.discordPublicKey ?? '',
+			discordLlmProvider: modelProvider ?? '',
+			discordLlmModelId: modelId ?? '',
+			discordMentionRoleIds: existing?.discordMentionRoleIds,
+			discordRespondToChannelIds: existing?.discordRespondToChannelIds,
+			discordFallbackUserId: existing?.discordFallbackUserId,
+			discordFallbackUserEmail: existing?.discordFallbackUserEmail,
+			discordHideAnswerLink: existing?.discordHideAnswerLink,
+		});
 
-		await tx
-			.update(s.project)
-			.set({
-				discordSettings: {
-					discordBotToken: existing?.discordBotToken ?? '',
-					discordApplicationId: existing?.discordApplicationId ?? '',
-					discordPublicKey: existing?.discordPublicKey ?? '',
-					discordLlmProvider: modelProvider ?? '',
-					discordLlmModelId: modelId ?? '',
-					discordMentionRoleIds: existing?.discordMentionRoleIds,
-					discordRespondToChannelIds: existing?.discordRespondToChannelIds,
-					discordFallbackUserId: existing?.discordFallbackUserId,
-					discordFallbackUserEmail: existing?.discordFallbackUserEmail,
-					discordHideAnswerLink: existing?.discordHideAnswerLink,
-				},
-			})
+		// SQLite drivers are synchronous: better-sqlite3 rejects a Promise-returning transaction
+		// callback, and Bun's driver commits before an async body's awaited writes run. So use the
+		// sync query API there and the async form only for Postgres, like createProjectWithDefaultGroup.
+		if (dbConfig.dialect === Dialect.Postgres) {
+			return (async () => {
+				const project = await takeFirstOrThrow(
+					tx.select().from(s.project).where(eq(s.project.id, projectId)).execute(),
+					`Project not found: ${projectId}`,
+				);
+				await tx
+					.update(s.project)
+					.set({ discordSettings: applyModel(project.discordSettings) })
+					.where(eq(s.project.id, projectId))
+					.execute();
+			})();
+		}
+
+		const project = tx.select().from(s.project).where(eq(s.project.id, projectId)).get();
+		if (!project) {
+			throw new Error(`Project not found: ${projectId}`);
+		}
+		tx.update(s.project)
+			.set({ discordSettings: applyModel(project.discordSettings) })
 			.where(eq(s.project.id, projectId))
-			.execute();
+			.run();
 	});
-};
 
 export const deleteProjectDiscordConfig = async (projectId: string): Promise<void> => {
 	await db.update(s.project).set({ discordSettings: null }).where(eq(s.project.id, projectId)).execute();
