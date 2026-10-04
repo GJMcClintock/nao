@@ -92,12 +92,6 @@ describe('Discord fallback user', () => {
 			mentionRoleIds: ['role-1'],
 		});
 
-		// better-sqlite3 (the test driver) is synchronous and refuses an async transaction callback,
-		// so run the body directly: the logic under test is the read-modify-write of the settings
-		// blob, not the tx. Production runs on Bun's sqlite driver, which does support the async form.
-		vi.spyOn(db, 'transaction').mockImplementation(((callback: (tx: typeof db) => Promise<unknown>) =>
-			callback(db)) as unknown as typeof db.transaction);
-
 		await updateProjectDiscordModel(PROJECT_ID, null, null);
 
 		const config = await getProjectDiscordConfig(PROJECT_ID);

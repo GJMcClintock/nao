@@ -378,6 +378,7 @@ export const chatMessage = sqliteTable(
 		source: text('source', { enum: MESSAGE_SOURCES }),
 		isForked: integer('isForked', { mode: 'boolean' }),
 		citation: text('citation', { mode: 'json' }).$type<CitationData>(),
+		discordMessageId: text('discord_message_id'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
@@ -397,6 +398,7 @@ export const chatMessage = sqliteTable(
 		index('chat_message_createdAt_idx').on(table.createdAt),
 		index('chat_message_versionGroupId_idx').on(table.versionGroupId),
 		index('chat_message_senderUserId_idx').on(table.senderUserId),
+		index('chat_message_discordMessageId_idx').on(table.discordMessageId),
 	],
 );
 

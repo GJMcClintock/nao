@@ -355,6 +355,7 @@ export const chatMessage = pgTable(
 		source: text('source', { enum: MESSAGE_SOURCES }),
 		isForked: boolean('isForked'),
 		citation: jsonb('citation').$type<CitationData>(),
+		discordMessageId: text('discord_message_id'),
 		createdAt: timestamp('created_at').defaultNow().notNull(),
 
 		// Token usage columns
@@ -372,6 +373,7 @@ export const chatMessage = pgTable(
 		index('chat_message_createdAt_idx').on(table.createdAt),
 		index('chat_message_versionGroupId_idx').on(table.versionGroupId),
 		index('chat_message_senderUserId_idx').on(table.senderUserId),
+		index('chat_message_discordMessageId_idx').on(table.discordMessageId),
 	],
 );
 
