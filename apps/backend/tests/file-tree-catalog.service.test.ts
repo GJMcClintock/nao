@@ -114,14 +114,35 @@ describe('project files context catalog', () => {
 		});
 	});
 
-	it('never offers nao_config.yaml since the agent can never read it', () => {
+	it('never offers nao_config.yaml at any depth or casing since the agent can never read it', () => {
 		const project = createProject();
+		fs.mkdirSync(path.join(project, 'envs'));
 		fs.writeFileSync(path.join(project, 'nao_config.yaml'), 'llm: {}');
+		fs.writeFileSync(path.join(project, 'envs', 'NAO_CONFIG.YAML'), 'llm: {}');
 		fs.writeFileSync(path.join(project, 'RULES.md'), 'rules');
 
 		expect(getFilesContextCatalog(project)).toEqual({
 			syncState: 'ready',
-			entries: [{ kind: 'file', path: 'RULES.md' }],
+			entries: [
+				{ kind: 'folder', path: 'envs' },
+				{ kind: 'file', path: 'RULES.md' },
+			],
+		});
+	});
+
+	it('omits names the grant editor would normalize to a different path', () => {
+		const project = createProject();
+		fs.mkdirSync(path.join(project, 'reports'));
+		fs.mkdirSync(path.join(project, 'reports '));
+		fs.writeFileSync(path.join(project, 'reports', 'q1.md'), 'q1');
+		fs.writeFileSync(path.join(project, 'reports ', 'secret.md'), 'secret');
+
+		expect(getFilesContextCatalog(project)).toEqual({
+			syncState: 'ready',
+			entries: [
+				{ kind: 'folder', path: 'reports' },
+				{ kind: 'file', path: 'reports/q1.md' },
+			],
 		});
 	});
 

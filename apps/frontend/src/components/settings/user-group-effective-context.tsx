@@ -507,7 +507,7 @@ function ContextNode({
 	}
 
 	const open = searching || expandedPaths.has(node.path);
-	const panelId = `effective-${label}-${toDomId(node.path)}`;
+	const panelId = `effective-${label}-folder-${toDomId(node.path)}`;
 	return (
 		<li>
 			<FolderButton

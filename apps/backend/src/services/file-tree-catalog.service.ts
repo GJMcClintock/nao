@@ -25,7 +25,7 @@ const SCOPED_ROOT_NAMES = new Set(['databases', 'docs']);
 const DOCS_SCOPE: FileTreeScope = { rootRelativePath: 'docs', includesRootEntry: () => true };
 const PROJECT_FILES_SCOPE: FileTreeScope = {
 	rootRelativePath: '',
-	includesRootEntry: (entryName) => !SCOPED_ROOT_NAMES.has(entryName) && entryName !== CONTEXT_CONFIG_FILENAME,
+	includesRootEntry: (entryName) => !SCOPED_ROOT_NAMES.has(entryName),
 };
 
 export function getDocsContextCatalog(projectFolder: string): FileTreeCatalog {
@@ -54,6 +54,11 @@ function getFileTreeCatalog(projectFolder: string, scope: FileTreeScope): FileTr
 	return { syncState: 'ready', entries: scanFileTreeDirectory(rootFolder, '', projectFolder, scope) };
 }
 
+/** The agent can never read `nao_config.yaml` wherever it lives, so a grant on it would be unusable. */
+function isProjectConfigFile(entryName: string): boolean {
+	return entryName.toLowerCase() === CONTEXT_CONFIG_FILENAME;
+}
+
 function scanFileTreeDirectory(
 	directory: string,
 	relativeDirectory: string,
@@ -66,6 +71,7 @@ function scanFileTreeDirectory(
 		.filter(
 			(entry) =>
 				!entry.isSymbolicLink() &&
+				!isProjectConfigFile(entry.name) &&
 				(relativeDirectory !== '' || scope.includesRootEntry(entry.name)) &&
 				!shouldExcludeEntry(entry.name, projectRelativeDirectory, projectFolder),
 		)
@@ -76,7 +82,7 @@ function scanFileTreeDirectory(
 
 	return entries.flatMap((entry): FileTreeCatalogEntry[] => {
 		const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
-		if (normalizeFileTreePath(relativePath) === null) {
+		if (normalizeFileTreePath(relativePath) !== relativePath) {
 			return [];
 		}
 		if (entry.isDirectory()) {

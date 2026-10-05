@@ -306,6 +306,23 @@ describe('user group docs and project file context access', () => {
 		});
 	});
 
+	it('fails malformed v4 sections closed independently while keeping project files unrestricted', () => {
+		expect(
+			parseStoredUserGroupContextAccess(
+				{
+					version: 4,
+					databaseAccess: { mode: 'all', strict: 'yes' },
+					docsAccess: { mode: 'restricted', grants: [{ kind: 'file', path: '../secret' }] },
+				},
+				true,
+			),
+		).toEqual({
+			databaseAccess: FAIL_CLOSED_DATABASE_CONTEXT_ACCESS,
+			docsAccess: EMPTY_DOCS_CONTEXT_ACCESS,
+			filesAccess: ALL_FILES_CONTEXT_ACCESS,
+		});
+	});
+
 	it('fails malformed v5 sections closed independently', () => {
 		expect(parseStoredUserGroupContextAccess('invalid', true)).toEqual({
 			databaseAccess: FAIL_CLOSED_DATABASE_CONTEXT_ACCESS,
