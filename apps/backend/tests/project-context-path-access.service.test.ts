@@ -24,6 +24,7 @@ describe('project context path access', () => {
 		};
 		expect(isProjectContextPathAllowed(context, '/RULES.md', '/RULES.md', 'file')).toBe(true);
 		expect(isProjectContextPathAllowed(context, '/docs/anything.md', '/docs/anything.md', 'file')).toBe(true);
+		expect(isProjectContextPathAllowed(context, '/alias.sql', '/models/orders.sql', 'file')).toBe(true);
 	});
 
 	it('allows granted docs files and required ancestors while hiding siblings', () => {
@@ -130,10 +131,12 @@ describe('project context path access', () => {
 });
 
 describe('project file access', () => {
-	it('allows every non-docs path when the group is not restricted on files', () => {
+	it('allows every non-docs path, including symlinks within the project, when the group is not restricted on files', () => {
 		const context = filesContext({ mode: 'all' as const });
 		expect(isProjectContextPathAllowed(context, '/', '/', 'directory')).toBe(true);
 		expect(isProjectContextPathAllowed(context, '/models/orders.sql', '/models/orders.sql', 'file')).toBe(true);
+		expect(isProjectContextPathAllowed(context, '/models/link.sql', '/shared/orders.sql', 'file')).toBe(true);
+		expect(isProjectContextPathAllowed(context, '/models/link.md', '/docs/real.md', 'file')).toBe(false);
 	});
 
 	it('authorizes granted files and folders while hiding siblings', () => {
@@ -168,10 +171,13 @@ describe('project file access', () => {
 		).toBe(false);
 	});
 
-	it('denies the project root when nothing is granted', () => {
+	it('keeps the project root listable when no project file is granted, since docs and databases live under it', () => {
 		const context = filesContext({ mode: 'restricted' as const, grants: [] });
-		expect(isProjectContextPathAllowed(context, '/', '/', 'directory')).toBe(false);
+		expect(isProjectContextPathAllowed(context, '/', '/', 'directory')).toBe(true);
+		expect(isProjectContextPathAllowed(context, '', '/', 'directory')).toBe(true);
+		expect(isProjectContextPathAllowed(context, '/', '/', 'file')).toBe(false);
 		expect(isProjectContextPathAllowed(context, '/notes.md', '/notes.md', 'file')).toBe(false);
+		expect(isProjectContextPathAllowed(context, '/models', '/models', 'directory')).toBe(false);
 	});
 
 	it('keeps docs and project files as independent policies', () => {

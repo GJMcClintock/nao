@@ -1,16 +1,10 @@
-import {
-	isDatabaseContextTableGranted,
-	isDocsContextFileGranted,
-	isFilesContextFileGranted,
-	matchesDatabaseContextPattern,
-} from '@nao/shared';
+import { isDatabaseContextTableGranted, isFileTreeFileGranted, matchesDatabaseContextPattern } from '@nao/shared';
 import { ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { DatabaseContextAccess, DocsContextAccess, FilesContextAccess } from '@nao/shared';
 
 import type { DatabaseContextObject } from '@/components/settings/user-group-context-access';
-import type { DocsContextCatalogEntry } from '@/components/settings/user-group-docs-context-access';
-import type { FilesContextCatalogEntry } from '@/components/settings/user-group-files-context-access';
+import type { FileTreeCatalogEntry } from '@/components/settings/user-group-file-tree-access';
 import { FileExplorerIcon } from '@/components/settings/file-explorer-icon';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -26,8 +20,8 @@ interface UserGroupEffectiveContextProps {
 	docsAccess: DocsContextAccess;
 	filesAccess: FilesContextAccess;
 	contextObjects: DatabaseContextObject[];
-	docsEntries: DocsContextCatalogEntry[];
-	filesEntries: FilesContextCatalogEntry[];
+	docsEntries: FileTreeCatalogEntry[];
+	filesEntries: FileTreeCatalogEntry[];
 	databaseCatalogState?: CatalogState;
 	docsCatalogState?: CatalogState;
 	filesCatalogState?: CatalogState;
@@ -107,9 +101,7 @@ export function UserGroupEffectiveContext({
 	const allowedDocsFiles = useMemo(
 		() =>
 			deduplicateEntries(
-				docsEntries.filter(
-					(entry) => entry.kind === 'file' && isDocsContextFileGranted(docsAccess, entry.path),
-				),
+				docsEntries.filter((entry) => entry.kind === 'file' && isFileTreeFileGranted(docsAccess, entry.path)),
 			),
 		[docsAccess, docsEntries],
 	);
@@ -123,9 +115,7 @@ export function UserGroupEffectiveContext({
 	const allowedFiles = useMemo(
 		() =>
 			deduplicateEntries(
-				filesEntries.filter(
-					(entry) => entry.kind === 'file' && isFilesContextFileGranted(filesAccess, entry.path),
-				),
+				filesEntries.filter((entry) => entry.kind === 'file' && isFileTreeFileGranted(filesAccess, entry.path)),
 			),
 		[filesAccess, filesEntries],
 	);

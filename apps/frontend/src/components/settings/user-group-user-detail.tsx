@@ -17,8 +17,7 @@ import type {
 } from '@nao/shared';
 
 import type { DatabaseContextObject } from '@/components/settings/user-group-context-access';
-import type { DocsContextCatalogEntry } from '@/components/settings/user-group-docs-context-access';
-import type { FilesContextCatalogEntry } from '@/components/settings/user-group-files-context-access';
+import type { FileTreeCatalogEntry } from '@/components/settings/user-group-file-tree-access';
 import type { UserGroupEditorGroup } from '@/components/settings/user-group-editor';
 import { ResponsiveGroupChips } from '@/components/settings/user-group-chips';
 import { getEffectiveUserGroupAccessSummary } from '@/components/settings/user-group-access-summary';
@@ -56,8 +55,8 @@ interface UserGroupUserDetailProps {
 	memberships: Array<{ groupId: string; userId: string }>;
 	effectiveAccess: EffectiveUserGroupAccess;
 	contextObjects: DatabaseContextObject[];
-	docsEntries: DocsContextCatalogEntry[];
-	filesEntries: FilesContextCatalogEntry[];
+	docsEntries: FileTreeCatalogEntry[];
+	filesEntries: FileTreeCatalogEntry[];
 	databaseSyncState?: 'missing' | 'ready';
 	docsSyncState?: 'missing' | 'ready';
 	filesSyncState?: 'missing' | 'ready';

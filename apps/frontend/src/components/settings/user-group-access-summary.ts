@@ -1,26 +1,23 @@
-import {
-	isDatabaseContextTableGranted,
-	isDocsContextFileGranted,
-	isFilesContextFileGranted,
-	USER_GROUP_FEATURE_DEFINITIONS,
-} from '@nao/shared';
+import { isDatabaseContextTableGranted, isFileTreeFileGranted, USER_GROUP_FEATURE_DEFINITIONS } from '@nao/shared';
 import type { DatabaseContextAccess, DocsContextAccess, FilesContextAccess, UserGroupFeature } from '@nao/shared';
 
 import type { DatabaseContextObject } from '@/components/settings/user-group-context-access';
-import type { DocsContextCatalogEntry } from '@/components/settings/user-group-docs-context-access';
-import type { FilesContextCatalogEntry } from '@/components/settings/user-group-files-context-access';
 import type { UserGroupEditorGroup } from '@/components/settings/user-group-editor';
+import type { FileTreeCatalogEntry } from '@/components/settings/user-group-file-tree-access';
 import { getDatabaseContextTableSelectionSummary } from '@/components/settings/user-group-context-access';
-import { getDocsContextSelectionSummary } from '@/components/settings/user-group-docs-context-access';
-import { getFilesContextSelectionSummary } from '@/components/settings/user-group-files-context-access';
+import {
+	DOCS_TREE_LABELS,
+	getFileTreeSelectionSummary,
+	PROJECT_FILES_TREE_LABELS,
+} from '@/components/settings/user-group-file-tree-access';
 
 export type UserGroupCatalogState = 'loading' | 'error' | 'ready';
 
 export function getUserGroupAccessSummary(
 	group: UserGroupEditorGroup,
 	contextObjects: DatabaseContextObject[],
-	docsEntries: DocsContextCatalogEntry[],
-	filesEntries: FilesContextCatalogEntry[],
+	docsEntries: FileTreeCatalogEntry[],
+	filesEntries: FileTreeCatalogEntry[],
 	catalogStates: {
 		database: UserGroupCatalogState;
 		docs: UserGroupCatalogState;
@@ -45,7 +42,7 @@ export function getUserGroupAccessSummary(
 				? 'Docs unavailable'
 				: group.docsAccess.mode === 'all'
 					? 'All docs'
-					: getDocsContextSelectionSummary(group.docsAccess, docsEntries);
+					: getFileTreeSelectionSummary(DOCS_TREE_LABELS, group.docsAccess, docsEntries);
 	const filesSummary =
 		catalogStates.files === 'loading'
 			? 'Loading files...'
@@ -53,7 +50,7 @@ export function getUserGroupAccessSummary(
 				? 'Files unavailable'
 				: group.filesAccess.mode === 'all'
 					? 'All files'
-					: getFilesContextSelectionSummary(group.filesAccess, filesEntries);
+					: getFileTreeSelectionSummary(PROJECT_FILES_TREE_LABELS, group.filesAccess, filesEntries);
 
 	return `${featureSummary} · ${tableSummary === '0 tables' ? 'No tables' : tableSummary} · ${
 		group.databaseAccess.strict ? 'Strict' : 'Not strict'
@@ -70,8 +67,8 @@ export function getEffectiveUserGroupAccessSummary(
 		filesAccess: FilesContextAccess;
 	},
 	contextObjects: DatabaseContextObject[],
-	docsEntries: DocsContextCatalogEntry[],
-	filesEntries: FilesContextCatalogEntry[],
+	docsEntries: FileTreeCatalogEntry[],
+	filesEntries: FileTreeCatalogEntry[],
 ): string {
 	const featureCount = USER_GROUP_FEATURE_DEFINITIONS.filter((feature) => access.features[feature.key]).length;
 	const tableCount = new Set(
@@ -81,12 +78,12 @@ export function getEffectiveUserGroupAccessSummary(
 	).size;
 	const docsCount = new Set(
 		docsEntries
-			.filter((entry) => entry.kind === 'file' && isDocsContextFileGranted(access.docsAccess, entry.path))
+			.filter((entry) => entry.kind === 'file' && isFileTreeFileGranted(access.docsAccess, entry.path))
 			.map((entry) => entry.path),
 	).size;
 	const filesCount = new Set(
 		filesEntries
-			.filter((entry) => entry.kind === 'file' && isFilesContextFileGranted(access.filesAccess, entry.path))
+			.filter((entry) => entry.kind === 'file' && isFileTreeFileGranted(access.filesAccess, entry.path))
 			.map((entry) => entry.path),
 	).size;
 

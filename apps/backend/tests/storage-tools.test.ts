@@ -303,15 +303,27 @@ describe('search', () => {
 		await expect(run(searchTool, { pattern: '../**' })).rejects.toThrow("'..' is not allowed");
 	});
 
-	it('omits a symlinked project file instead of returning its canonical target', async () => {
+	it('returns the matched path instead of its canonical symlink target', async () => {
 		const target = path.join(projectFolder, 'target.md');
 		await fs.writeFile(target, 'target');
 		await fs.symlink(target, path.join(projectFolder, 'alias.md'));
 
 		expect(await run(searchTool, { pattern: 'alias.md' })).toEqual({
 			_version: '1',
-			files: [],
+			files: [{ path: '/alias.md', dir: '/', size: '6' }],
 		});
+	});
+
+	it('omits a symlinked project file when project files are restricted', async () => {
+		const target = path.join(projectFolder, 'target.md');
+		await fs.writeFile(target, 'target');
+		await fs.symlink(target, path.join(projectFolder, 'alias.md'));
+		filesContextAccess = {
+			enforced: true,
+			access: { mode: 'restricted', grants: [{ kind: 'file', path: 'alias.md' }] },
+		};
+
+		expect(await run(searchTool, { pattern: 'alias.md' })).toEqual({ _version: '1', files: [] });
 	});
 });
 

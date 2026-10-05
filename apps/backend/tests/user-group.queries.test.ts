@@ -1,4 +1,9 @@
-import { ALL_FILES_CONTEXT_ACCESS, resolveWarehouseRowSecurity, type SsoGroupProvider } from '@nao/shared';
+import {
+	ALL_FILES_CONTEXT_ACCESS,
+	EMPTY_FILES_CONTEXT_ACCESS,
+	resolveWarehouseRowSecurity,
+	type SsoGroupProvider,
+} from '@nao/shared';
 import type { UserRole } from '@nao/shared/types';
 import { and, eq, inArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -653,7 +658,7 @@ describe('user group queries', () => {
 		expect(group.featureGrants).toEqual([]);
 		expect(group.databaseAccess).toEqual({ mode: 'restricted', strict: false, grants: [], patterns: [] });
 		expect(group.docsAccess).toEqual({ mode: 'restricted', grants: [] });
-		expect(group.filesAccess).toEqual(ALL_FILES_CONTEXT_ACCESS);
+		expect(group.filesAccess).toEqual(EMPTY_FILES_CONTEXT_ACCESS);
 		expect(group.toolCallDensityPolicy).toEqual({
 			defaultDensity: 'detailed',
 			canChange: true,
@@ -737,7 +742,7 @@ describe('user group queries', () => {
 				patterns: ['public.user*'],
 			},
 			docsAccess: { mode: 'restricted', grants: [] },
-			filesAccess: ALL_FILES_CONTEXT_ACCESS,
+			filesAccess: EMPTY_FILES_CONTEXT_ACCESS,
 		});
 
 		await updateUserGroup(PROJECT_ID, group.id, {

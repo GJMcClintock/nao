@@ -1,23 +1,17 @@
 import {
 	CONTEXT_CONFIG_FILENAME,
-	isDocsContextDirectoryGranted,
-	isDocsContextFileGranted,
-	isFilesContextDirectoryGranted,
-	isFilesContextFileGranted,
-	mayTraverseDocsContextDirectory,
-	mayTraverseFilesContextDirectory,
+	isFileTreeDirectoryGranted,
+	isFileTreeFileGranted,
+	mayTraverseFileTreeDirectory,
 } from '@nao/shared';
 import path from 'path';
 
 import type { ToolContext } from '../types/tools';
 import { isContextPathAllowed } from './context-access';
+import type { ResolvedFileTreeAccess } from './user-group-context-access.service';
 
 type ProjectPathKind = 'file' | 'directory';
-type ProjectPath =
-	| { kind: 'docs'; relativePath: string }
-	| { kind: 'files'; relativePath: string }
-	| { kind: 'database'; relativePath: string }
-	| { kind: 'invalid' };
+type ProjectPath = { kind: 'root' | 'docs' | 'files' | 'database'; relativePath: string } | { kind: 'invalid' };
 
 type ProjectPathAccessContext = Pick<ToolContext, 'warehouseTableAccess' | 'docsContextAccess' | 'filesContextAccess'>;
 
@@ -50,24 +44,29 @@ export function isProjectContextPathAllowed(
 	if (requestedPath.kind === 'invalid' || canonicalPath.kind === 'invalid') {
 		return false;
 	}
-	if (requestedPath.kind !== canonicalPath.kind || requestedPath.relativePath !== canonicalPath.relativePath) {
+	if (requestedPath.kind !== canonicalPath.kind) {
 		return false;
 	}
-	if (requestedPath.kind === 'database') {
-		return true;
+	switch (canonicalPath.kind) {
+		case 'root':
+			return kind === 'directory';
+		case 'database':
+			return true;
+		case 'docs':
+			return isFileTreePathAllowed(
+				context.docsContextAccess,
+				requestedPath.relativePath,
+				canonicalPath.relativePath,
+				kind,
+			);
+		case 'files':
+			return isFileTreePathAllowed(
+				context.filesContextAccess,
+				requestedPath.relativePath,
+				canonicalPath.relativePath,
+				kind,
+			);
 	}
-	if (requestedPath.kind === 'files') {
-		return isGrantedPath(context.filesContextAccess, canonicalPath.relativePath, kind, {
-			isFileGranted: isFilesContextFileGranted,
-			isDirectoryGranted: isFilesContextDirectoryGranted,
-			mayTraverseDirectory: mayTraverseFilesContextDirectory,
-		});
-	}
-	return isGrantedPath(context.docsContextAccess, canonicalPath.relativePath, kind, {
-		isFileGranted: isDocsContextFileGranted,
-		isDirectoryGranted: isDocsContextDirectoryGranted,
-		mayTraverseDirectory: mayTraverseDocsContextDirectory,
-	});
 }
 
 export function isDocsProjectPath(virtualPath: string): boolean {
@@ -79,27 +78,25 @@ function isProjectConfigPath(virtualPath: string): boolean {
 	return path.posix.basename(virtualPath).toLowerCase() === CONTEXT_CONFIG_FILENAME;
 }
 
-type GrantRules<GrantAccess> = {
-	isFileGranted: (access: GrantAccess, filePath: string) => boolean;
-	isDirectoryGranted: (access: GrantAccess, directoryPath: string) => boolean;
-	mayTraverseDirectory: (access: GrantAccess, directoryPath: string) => boolean;
-};
-
-function isGrantedPath<GrantAccess>(
-	resolvedAccess: { enforced: false } | { enforced: true; access: GrantAccess },
-	relativePath: string,
+/** Grants are matched on the path the agent addressed, so a restricted tree rejects symlinks and aliases to other paths. */
+function isFileTreePathAllowed(
+	resolvedAccess: ResolvedFileTreeAccess,
+	requestedPath: string,
+	canonicalPath: string,
 	kind: ProjectPathKind,
-	rules: GrantRules<GrantAccess>,
 ): boolean {
-	if (!resolvedAccess.enforced) {
+	if (!resolvedAccess.enforced || resolvedAccess.access.mode === 'all') {
 		return true;
 	}
+	if (requestedPath !== canonicalPath) {
+		return false;
+	}
 	if (kind === 'file') {
-		return rules.isFileGranted(resolvedAccess.access, relativePath);
+		return isFileTreeFileGranted(resolvedAccess.access, canonicalPath);
 	}
 	return (
-		rules.isDirectoryGranted(resolvedAccess.access, relativePath) ||
-		rules.mayTraverseDirectory(resolvedAccess.access, relativePath)
+		isFileTreeDirectoryGranted(resolvedAccess.access, canonicalPath) ||
+		mayTraverseFileTreeDirectory(resolvedAccess.access, canonicalPath)
 	);
 }
 
@@ -117,6 +114,9 @@ function parseProjectPath(virtualPath: string): ProjectPath {
 		return { kind: 'invalid' };
 	}
 	const normalizedPath = path.posix.normalize(relativePath);
+	if (normalizedPath === '.' || normalizedPath === '') {
+		return { kind: 'root', relativePath: '' };
+	}
 	if (normalizedPath === 'docs') {
 		return { kind: 'docs', relativePath: '' };
 	}
@@ -129,7 +129,7 @@ function parseProjectPath(virtualPath: string): ProjectPath {
 	if (addressedDocs || addressedDatabases) {
 		return { kind: 'invalid' };
 	}
-	return { kind: 'files', relativePath: normalizedPath === '.' ? '' : normalizedPath };
+	return { kind: 'files', relativePath: normalizedPath };
 }
 
 function hasControlCharacter(value: string): boolean {

@@ -6,8 +6,7 @@ import { useMemo } from 'react';
 
 import type { UserGroupCatalogState } from '@/components/settings/user-group-access-summary';
 import type { DatabaseContextObject } from '@/components/settings/user-group-context-access';
-import type { DocsContextCatalogEntry } from '@/components/settings/user-group-docs-context-access';
-import type { FilesContextCatalogEntry } from '@/components/settings/user-group-files-context-access';
+import type { FileTreeCatalogEntry } from '@/components/settings/user-group-file-tree-access';
 import type { UserGroupEditorGroup } from '@/components/settings/user-group-editor';
 import { getUserGroupAccessSummary } from '@/components/settings/user-group-access-summary';
 import { UpgradeToEnterprise } from '@/components/settings/upgrade-to-enterprise';
@@ -197,8 +196,8 @@ function GroupsTable({
 	groups: UserGroup[];
 	memberships: Array<{ groupId: string; userId: string }>;
 	contextObjects: DatabaseContextObject[];
-	docsEntries: DocsContextCatalogEntry[];
-	filesEntries: FilesContextCatalogEntry[];
+	docsEntries: FileTreeCatalogEntry[];
+	filesEntries: FileTreeCatalogEntry[];
 	databaseCatalogState: UserGroupCatalogState;
 	docsCatalogState: UserGroupCatalogState;
 	filesCatalogState: UserGroupCatalogState;

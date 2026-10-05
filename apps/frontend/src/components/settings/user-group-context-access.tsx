@@ -19,17 +19,13 @@ import type {
 import { FileExplorerIcon } from '@/components/settings/file-explorer-icon';
 import { UserGroupContextModeSelector } from '@/components/settings/user-group-context-mode-selector';
 import {
-	DocsContextTreeRoot,
-	getDocsContextSelectionCount,
-	getUnavailableDocsContextGrants,
-	UnavailableDocsGrants,
-} from '@/components/settings/user-group-docs-context-access';
-import {
-	FilesContextTreeRoot,
-	getFilesContextSelectionCount,
-	getUnavailableFilesContextGrants,
-	UnavailableFilesGrants,
-} from '@/components/settings/user-group-files-context-access';
+	DOCS_TREE_LABELS,
+	FileTreeAccessRoot,
+	getFileTreeSelectionCount,
+	getUnavailableFileTreeGrants,
+	PROJECT_FILES_TREE_LABELS,
+	UnavailableFileTreeGrants,
+} from '@/components/settings/user-group-file-tree-access';
 import { UserGroupSwitchRow } from '@/components/settings/user-group-switch-row';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -83,11 +79,11 @@ export function UserGroupContextAccess({
 	const unavailableDocsGrants =
 		docsAccess === undefined || docsCatalog.isLoading || docsCatalog.isError
 			? []
-			: getUnavailableDocsContextGrants(docsAccess, docsEntries);
+			: getUnavailableFileTreeGrants(docsAccess, docsEntries);
 	const unavailableFilesGrants =
 		filesAccess === undefined || filesCatalog.isLoading || filesCatalog.isError
 			? []
-			: getUnavailableFilesContextGrants(filesAccess, filesEntries);
+			: getUnavailableFileTreeGrants(filesAccess, filesEntries);
 	const combinedMode =
 		databaseAccess.mode === 'all' &&
 		(docsAccess === undefined || docsAccess.mode === 'all') &&
@@ -98,8 +94,8 @@ export function UserGroupContextAccess({
 	const isSearching = isSearchEnabled && search.trim().length > 0;
 	const treeObjects = isSearchEnabled ? filterDatabaseContextObjects(objects, search) : objects;
 	const tableSummary = getDatabaseContextTableSelectionSummary(databaseAccess, objects);
-	const docsCount = docsAccess === undefined ? undefined : getDocsContextSelectionCount(docsAccess, docsEntries);
-	const filesCount = filesAccess === undefined ? undefined : getFilesContextSelectionCount(filesAccess, filesEntries);
+	const docsCount = docsAccess === undefined ? undefined : getFileTreeSelectionCount(docsAccess, docsEntries);
+	const filesCount = filesAccess === undefined ? undefined : getFileTreeSelectionCount(filesAccess, filesEntries);
 
 	return (
 		<div className='flex flex-col gap-4'>
@@ -181,7 +177,8 @@ export function UserGroupContextAccess({
 						/>
 					)}
 					{docsAccess !== undefined && (
-						<DocsContextTreeRoot
+						<FileTreeAccessRoot
+							labels={DOCS_TREE_LABELS}
 							entries={docsEntries}
 							access={docsAccess}
 							search={isSearchEnabled ? search : ''}
@@ -195,7 +192,8 @@ export function UserGroupContextAccess({
 						/>
 					)}
 					{filesAccess !== undefined && (
-						<FilesContextTreeRoot
+						<FileTreeAccessRoot
+							labels={PROJECT_FILES_TREE_LABELS}
 							entries={filesEntries}
 							access={filesAccess}
 							search={isSearchEnabled ? search : ''}
@@ -218,14 +216,16 @@ export function UserGroupContextAccess({
 				/>
 			)}
 			{docsAccess?.mode === 'restricted' && unavailableDocsGrants.length > 0 && (
-				<UnavailableDocsGrants
+				<UnavailableFileTreeGrants
+					labels={DOCS_TREE_LABELS}
 					grants={unavailableDocsGrants}
 					access={docsAccess}
 					onChange={onDocsAccessChange}
 				/>
 			)}
 			{filesAccess?.mode === 'restricted' && unavailableFilesGrants.length > 0 && (
-				<UnavailableFilesGrants
+				<UnavailableFileTreeGrants
+					labels={PROJECT_FILES_TREE_LABELS}
 					grants={unavailableFilesGrants}
 					access={filesAccess}
 					onChange={onFilesAccessChange}

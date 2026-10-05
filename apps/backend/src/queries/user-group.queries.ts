@@ -1,10 +1,10 @@
 import {
-	ALL_FILES_CONTEXT_ACCESS,
 	type DatabaseContextAccess,
 	DEFAULT_TOOL_CALL_DENSITY_POLICY,
 	type DocsContextAccess,
 	EMPTY_DATABASE_CONTEXT_ACCESS,
 	EMPTY_DOCS_CONTEXT_ACCESS,
+	EMPTY_FILES_CONTEXT_ACCESS,
 	EMPTY_USER_GROUP_ROW_POLICIES,
 	type FilesContextAccess,
 	filterUserGroupRowPoliciesByDatabaseContext,
@@ -23,8 +23,7 @@ import {
 	type StoredProjectRowSecurity,
 	type ToolCallDensityPolicy,
 	unionDatabaseContextAccess,
-	unionDocsContextAccess,
-	unionFilesContextAccess,
+	unionFileTreeAccess,
 	USER_GROUP_FEATURES,
 	type UserGroupFeature,
 	type UserGroupRowPolicies,
@@ -170,8 +169,8 @@ export const resolveUserGroupAccess = async (
 			canChange: applicableGroups.some((group) => group.config.toolCallDensity.canChange),
 		},
 		databaseAccess: unionDatabaseContextAccess(applicableGroups.map((group) => group.contextAccess.databaseAccess)),
-		docsAccess: unionDocsContextAccess(applicableGroups.map((group) => group.contextAccess.docsAccess)),
-		filesAccess: unionFilesContextAccess(applicableGroups.map((group) => group.contextAccess.filesAccess)),
+		docsAccess: unionFileTreeAccess(applicableGroups.map((group) => group.contextAccess.docsAccess)),
+		filesAccess: unionFileTreeAccess(applicableGroups.map((group) => group.contextAccess.filesAccess)),
 		rowPolicies: applicableGroups.map((group) =>
 			filterUserGroupRowPoliciesByDatabaseContext(
 				parseStoredUserGroupRowPolicies(group.rowPolicies),
@@ -234,7 +233,7 @@ export const createUserGroup = async (
 	docsAccess: DocsContextAccess = EMPTY_DOCS_CONTEXT_ACCESS,
 	ssoMappings?: UserGroupSsoMappings,
 	rowPolicies: UserGroupRowPolicies = EMPTY_USER_GROUP_ROW_POLICIES,
-	filesAccess: FilesContextAccess = ALL_FILES_CONTEXT_ACCESS,
+	filesAccess: FilesContextAccess = EMPTY_FILES_CONTEXT_ACCESS,
 ): Promise<UserGroup> => {
 	const values = createUserGroupValues(
 		projectId,
@@ -278,7 +277,7 @@ export const createUserGroupWithinLimit = async (
 	docsAccess: DocsContextAccess = EMPTY_DOCS_CONTEXT_ACCESS,
 	ssoMappings?: UserGroupSsoMappings,
 	rowPolicies: UserGroupRowPolicies = EMPTY_USER_GROUP_ROW_POLICIES,
-	filesAccess: FilesContextAccess = ALL_FILES_CONTEXT_ACCESS,
+	filesAccess: FilesContextAccess = EMPTY_FILES_CONTEXT_ACCESS,
 ): Promise<UserGroup> => {
 	const values = createUserGroupValues(
 		projectId,
@@ -608,7 +607,7 @@ function createUserGroupValues(
 	docsAccess: DocsContextAccess,
 	ssoMappings?: UserGroupSsoMappings,
 	rowPolicies: UserGroupRowPolicies = EMPTY_USER_GROUP_ROW_POLICIES,
-	filesAccess: FilesContextAccess = ALL_FILES_CONTEXT_ACCESS,
+	filesAccess: FilesContextAccess = EMPTY_FILES_CONTEXT_ACCESS,
 ): NewUserGroup {
 	const filteredRowPolicies = filterUserGroupRowPoliciesByDatabaseContext(rowPolicies, databaseAccess);
 	return {

@@ -10,8 +10,7 @@ import {
 	filterProjectRowSecurityByDatabaseContext,
 	filterUserGroupRowPoliciesByDatabaseContext,
 	normalizeDatabaseContextAccess,
-	normalizeDocsContextAccess,
-	normalizeFilesContextAccess,
+	normalizeFileTreeAccess,
 	normalizeUserGroupRowPolicies,
 	normalizeUserGroupSsoMappings,
 	USER_GROUP_FEATURE_DEFINITIONS,
@@ -24,6 +23,7 @@ import type {
 	DatabaseContextAccess,
 	DocsContextAccess,
 	FilesContextAccess,
+	FileTreeAccess,
 	UserGroupFeatureDefinition,
 	UserGroupRowPolicies,
 	UserGroupSsoMappings,
@@ -779,8 +779,8 @@ export function hasUserGroupEditorChanges(
 		values.toolCallDensityPolicy.defaultDensity !== group.toolCallDensityPolicy.defaultDensity ||
 		values.toolCallDensityPolicy.canChange !== group.toolCallDensityPolicy.canChange ||
 		!haveSameDatabaseAccess(values.databaseAccess, group.databaseAccess) ||
-		!haveSameDocsAccess(values.docsAccess ?? group.docsAccess, group.docsAccess) ||
-		!haveSameFilesAccess(values.filesAccess ?? group.filesAccess, group.filesAccess) ||
+		!haveSameFileTreeAccess(values.docsAccess ?? group.docsAccess, group.docsAccess) ||
+		!haveSameFileTreeAccess(values.filesAccess ?? group.filesAccess, group.filesAccess) ||
 		!haveSameSsoMappings(values.ssoMappings ?? group.ssoMappings, group.ssoMappings) ||
 		!haveSameRowPolicies(
 			values.rowPolicies ?? group.rowPolicies ?? EMPTY_USER_GROUP_ROW_POLICIES,
@@ -885,12 +885,8 @@ function haveSameDatabaseAccess(left: DatabaseContextAccess, right: DatabaseCont
 	);
 }
 
-function haveSameDocsAccess(left: DocsContextAccess, right: DocsContextAccess): boolean {
-	return JSON.stringify(normalizeDocsContextAccess(left)) === JSON.stringify(normalizeDocsContextAccess(right));
-}
-
-function haveSameFilesAccess(left: FilesContextAccess, right: FilesContextAccess): boolean {
-	return JSON.stringify(normalizeFilesContextAccess(left)) === JSON.stringify(normalizeFilesContextAccess(right));
+function haveSameFileTreeAccess(left: FileTreeAccess, right: FileTreeAccess): boolean {
+	return JSON.stringify(normalizeFileTreeAccess(left)) === JSON.stringify(normalizeFileTreeAccess(right));
 }
 
 function haveSameSsoMappings(left: UserGroupSsoMappings, right: UserGroupSsoMappings): boolean {
