@@ -547,6 +547,20 @@
       "when": 1791358974879,
       "tag": "0077_story_app_state",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1792112994254,
+      "tag": "0078_add_discord",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1792113029789,
+      "tag": "0079_add_discord_message_id",
+      "breakpoints": true
     }
   ]
 }
