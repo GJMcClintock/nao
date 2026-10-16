@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Trash2 } from 'lucide-react';
+import { ExternalLink, Pencil, Trash2 } from 'lucide-react';
 import { DiscordForm } from './discord-form';
 import type { DiscordFormValues } from './discord-form';
 import { Button } from '@/components/ui/button';
+import { CopyableUrl } from '@/components/ui/copyable-url';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LlmProviderIcon } from '@/components/ui/llm-provider-icon';
 import { SettingsCard } from '@/components/ui/settings-card';
 import { trpc } from '@/main';
+
+/** View channels, send messages (and in threads), create public threads, embed links, attach files, read history, add reactions. */
+const DISCORD_BOT_PERMISSIONS = '309237763136';
 
 interface DiscordConfigSectionProps {
 	isAdmin: boolean;
@@ -24,6 +28,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 	const [selectedModel, setSelectedModel] = useState<AvailableModel | null>(null);
 
 	const projectConfig = discordConfig.data?.projectConfig;
+	const webhookUrl = discordConfig.data?.webhookUrl ?? '';
 
 	useEffect(() => {
 		if (!availableModels || availableModels.length === 0) {
@@ -130,6 +135,7 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 	}
 
 	const hasMultipleModels = Boolean(availableModels && availableModels.length > 1);
+	const inviteUrl = buildDiscordInviteUrl(projectConfig.applicationId);
 
 	return (
 		<div className='flex flex-col gap-6'>
@@ -165,6 +171,30 @@ export function DiscordConfigSection({ isAdmin, onCancelSetup }: DiscordConfigSe
 					</div>
 				</div>
 			</SettingsCard>
+
+			<SettingsCard
+				title='Add to your server'
+				description='Invite the bot to a Discord server you manage, then mention it or send it a direct message'
+			>
+				<div className='flex flex-col gap-3'>
+					<Button asChild variant='secondary' className='w-fit'>
+						<a href={inviteUrl} target='_blank' rel='noreferrer'>
+							<ExternalLink className='size-4' />
+							Add to Discord
+						</a>
+					</Button>
+					<CopyableUrl url={inviteUrl} />
+				</div>
+			</SettingsCard>
+
+			{webhookUrl && (
+				<SettingsCard
+					title='Interactions Endpoint URL'
+					description='Set this URL in your Discord application general information to enable the Stop button'
+				>
+					<CopyableUrl url={webhookUrl} />
+				</SettingsCard>
+			)}
 
 			<SettingsCard title='Settings' description='Configure how the Discord bot behaves'>
 				<div className='grid gap-2'>
@@ -253,6 +283,15 @@ function DiscordConnectionDetails({
 			</span>
 		</div>
 	);
+}
+
+function buildDiscordInviteUrl(applicationId: string): string {
+	const params = new URLSearchParams({
+		client_id: applicationId,
+		scope: 'bot',
+		permissions: DISCORD_BOT_PERMISSIONS,
+	});
+	return `https://discord.com/oauth2/authorize?${params.toString()}`;
 }
 
 function parseIdList(value: string): string[] {

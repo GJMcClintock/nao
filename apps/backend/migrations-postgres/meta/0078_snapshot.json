@@ -1,5 +1,5 @@
 {
-  "id": "2defcd9b-d8ce-42e6-9b70-8d61923621e6",
+  "id": "d1e171f4-acf7-4fcc-9a98-2c69f0b93623",
   "prevId": "3e34be03-df8d-4ed0-88d5-e65c3e7cc3cf",
   "version": "7",
   "dialect": "postgresql",
@@ -1654,6 +1654,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "discord_message_id": {
+          "name": "discord_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1782,6 +1788,21 @@
           "columns": [
             {
               "expression": "sender_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chat_message_discordMessageId_idx": {
+          "name": "chat_message_discordMessageId_idx",
+          "columns": [
+            {
+              "expression": "discord_message_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -14,6 +14,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as EmbedRouteImport } from './routes/embed'
+import { Route as DiscordLinkRouteImport } from './routes/discord-link'
 import { Route as ConsentRouteImport } from './routes/consent'
 import { Route as CliLoginRouteImport } from './routes/cli-login'
 import { Route as SidebarLayoutRouteImport } from './routes/_sidebar-layout'
@@ -98,6 +99,11 @@ const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
 const EmbedRoute = EmbedRouteImport.update({
   id: '/embed',
   path: '/embed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DiscordLinkRoute = DiscordLinkRouteImport.update({
+  id: '/discord-link',
+  path: '/discord-link',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConsentRoute = ConsentRouteImport.update({
@@ -454,6 +460,7 @@ export interface FileRoutesByFullPath {
   '/': typeof SidebarLayoutChatLayoutIndexRoute
   '/cli-login': typeof CliLoginRoute
   '/consent': typeof ConsentRoute
+  '/discord-link': typeof DiscordLinkRoute
   '/embed': typeof EmbedRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -519,6 +526,7 @@ export interface FileRoutesByTo {
   '/': typeof SidebarLayoutChatLayoutIndexRoute
   '/cli-login': typeof CliLoginRoute
   '/consent': typeof ConsentRoute
+  '/discord-link': typeof DiscordLinkRoute
   '/embed': typeof EmbedRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -580,6 +588,7 @@ export interface FileRoutesById {
   '/_sidebar-layout': typeof SidebarLayoutRouteWithChildren
   '/cli-login': typeof CliLoginRoute
   '/consent': typeof ConsentRoute
+  '/discord-link': typeof DiscordLinkRoute
   '/embed': typeof EmbedRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -649,6 +658,7 @@ export interface FileRouteTypes {
     | '/'
     | '/cli-login'
     | '/consent'
+    | '/discord-link'
     | '/embed'
     | '/forgot-password'
     | '/login'
@@ -714,6 +724,7 @@ export interface FileRouteTypes {
     | '/'
     | '/cli-login'
     | '/consent'
+    | '/discord-link'
     | '/embed'
     | '/forgot-password'
     | '/login'
@@ -774,6 +785,7 @@ export interface FileRouteTypes {
     | '/_sidebar-layout'
     | '/cli-login'
     | '/consent'
+    | '/discord-link'
     | '/embed'
     | '/forgot-password'
     | '/login'
@@ -842,6 +854,7 @@ export interface RootRouteChildren {
   SidebarLayoutRoute: typeof SidebarLayoutRouteWithChildren
   CliLoginRoute: typeof CliLoginRoute
   ConsentRoute: typeof ConsentRoute
+  DiscordLinkRoute: typeof DiscordLinkRoute
   EmbedRoute: typeof EmbedRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
@@ -884,6 +897,13 @@ declare module '@tanstack/react-router' {
       path: '/embed'
       fullPath: '/embed'
       preLoaderRoute: typeof EmbedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/discord-link': {
+      id: '/discord-link'
+      path: '/discord-link'
+      fullPath: '/discord-link'
+      preLoaderRoute: typeof DiscordLinkRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/consent': {
@@ -1562,6 +1582,7 @@ const rootRouteChildren: RootRouteChildren = {
   SidebarLayoutRoute: SidebarLayoutRouteWithChildren,
   CliLoginRoute: CliLoginRoute,
   ConsentRoute: ConsentRoute,
+  DiscordLinkRoute: DiscordLinkRoute,
   EmbedRoute: EmbedRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,

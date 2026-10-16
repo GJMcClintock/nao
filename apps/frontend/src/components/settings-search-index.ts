@@ -945,9 +945,25 @@ export const settingsSearchIndex: SettingsSearchEntry[] = [
 		page: '/settings/project/integrations/discord',
 		pageLabel: 'Integrations & MCP',
 		section: 'Discord',
+		title: 'Add to your server',
+		description: 'Invite the Discord bot to a server you manage.',
+		keywords: ['discord', 'invite', 'add bot', 'server', 'oauth'],
+	},
+	{
+		page: '/settings/project/integrations/discord',
+		pageLabel: 'Integrations & MCP',
+		section: 'Discord',
+		title: 'Interactions Endpoint URL',
+		description: 'Register this URL in your Discord application to enable the Stop button.',
+		keywords: ['discord', 'interactions', 'endpoint', 'webhook', 'url', 'stop'],
+	},
+	{
+		page: '/settings/project/integrations/discord',
+		pageLabel: 'Integrations & MCP',
+		section: 'Discord',
 		title: 'Link manually',
-		description: 'Discord does not expose member emails; send login <code> to the bot to link your account.',
-		keywords: ['link', 'login', 'discord', 'email'],
+		description: 'The bot sends a connect link by direct message; send login <code> if your DMs are closed.',
+		keywords: ['link', 'login', 'discord', 'email', 'connect', 'direct message'],
 	},
 
 	{

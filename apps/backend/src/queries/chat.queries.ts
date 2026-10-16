@@ -737,7 +737,6 @@ export const attachDiscordMessageId = async (messageId: string, discordMessageId
 	await db.update(s.chatMessage).set({ discordMessageId }).where(eq(s.chatMessage.id, messageId)).execute();
 };
 
-/** Discord feedback reactions arrive with the reacted message id, so resolve the answer it belongs to. */
 export const getAssistantMessageIdByDiscordMessage = async (
 	discordMessageId: string,
 	projectId: string,

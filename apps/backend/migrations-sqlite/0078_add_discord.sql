@@ -12,4 +12,6 @@ CREATE TABLE `project_discord_link` (
 CREATE INDEX `project_discord_link_userId_idx` ON `project_discord_link` (`user_id`);--> statement-breakpoint
 ALTER TABLE `chat` ADD `discord_thread_id` text;--> statement-breakpoint
 CREATE INDEX `chat_discord_thread_idx` ON `chat` (`discord_thread_id`);--> statement-breakpoint
+ALTER TABLE `chat_message` ADD `discord_message_id` text;--> statement-breakpoint
+CREATE INDEX `chat_message_discordMessageId_idx` ON `chat_message` (`discord_message_id`);--> statement-breakpoint
 ALTER TABLE `project` ADD `discord_settings` text;

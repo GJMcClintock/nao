@@ -4,7 +4,7 @@ import { stripAssistantTags } from '@nao/shared';
 import { isQueryResultPart, type QueryResultPartType } from '@nao/shared/execute-sql-parts';
 import { displayChart } from '@nao/shared/tools';
 import { InferUIMessageChunk, readUIMessageStream } from 'ai';
-import { type AdapterPostableMessage, Chat, type Logger as ChatLogger, Message, type SentMessage, Thread } from 'chat';
+import { Chat, type Logger as ChatLogger, Message, type SentMessage, Thread } from 'chat';
 
 import { generateChartImage } from '../components/generate-chart';
 import type { User } from '../db/abstractSchema';
@@ -18,39 +18,44 @@ import { getUser, getUserByMessagingProviderCode } from '../queries/user.queries
 import { UIChat, UIMessage, UIMessagePart } from '../types/chat';
 import { ConversationContext, StreamState, ToolCallEntry } from '../types/messaging-provider';
 import { createChatTitle } from '../utils/ai';
+import { DISCORD_LINK_TOKEN_TTL_MINUTES, generateDiscordLinkToken } from '../utils/discord-link-token';
 import { logger } from '../utils/logger';
 import {
-	createDiscordAnswerMessage,
+	createMarkdownTable,
+	getLoginCommandForUnlinkedUser,
+	type MessageAuthorType,
+	resolveSqlOutput,
+	shouldHandleMessage,
+	truncateMarkdown,
+} from '../utils/markdown-messaging';
+import {
 	createLiveToolCall,
+	createMarkdownAnswerMessage,
 	createSummaryToolCalls,
+	escapeMarkdownText,
 	EXCLUDED_TOOLS,
 	formatClarificationText,
 	formatMessagingError,
 	renderMapImage,
 } from '../utils/messaging-provider';
 import { agentService } from './agent';
+import { getAppName } from './branding.service';
+import { assertProjectCloudBillingAccess } from './cloud-billing-access.service';
 import {
-	buildDiscordAnswerPostable,
-	cacheDiscordEmail,
+	buildDiscordAnswerPayload,
 	canUseDiscordInProject,
 	createDiscordAnswerAttachment,
-	createDiscordMarkdownTable,
+	DISCORD_ANSWERING_PLACEHOLDER,
 	DISCORD_ATTACHMENT_NOTICE,
+	DISCORD_LOGIN_CODE_PROMPT,
 	DISCORD_POST_MAX_LENGTH,
 	DISCORD_THUMBS_DOWN,
 	DISCORD_THUMBS_UP,
-	type DiscordAuthorType,
-	type DiscordEmailCache,
-	fetchDiscordUserEmail,
-	getDiscordLoginCommandForUnlinkedUser,
+	editDiscordMessage,
+	formatDiscordTable,
 	hasExplicitDiscordMention,
-	resolveDiscordAccount,
 	resolveDiscordReactionFeedback,
-	resolveDiscordSqlOutput,
-	shouldHandleDiscordMessage,
-	truncateDiscordMarkdown,
 } from './discord-helpers';
-import { posthog, PostHogEvent } from './posthog';
 
 /** Matches Slack's 200ms cadence; Discord rate-limits per-channel edits. */
 const UPDATE_INTERVAL_MS = 200;
@@ -58,14 +63,14 @@ const UPDATE_INTERVAL_MS = 200;
 /** Node clamps setTimeout delays above 2^31-1 to 1ms, so this is the longest "run until stopped". */
 const GATEWAY_LISTENER_DURATION_MS = 2_147_483_647;
 
-/** Delay before starting the listener again after a failed restart. */
 const GATEWAY_RESTART_RETRY_MS = 30_000;
+
+/** Discord allows one reaction write per 250ms per channel and the adapter doesn't retry on 429. */
+const REACTION_SEED_INTERVAL_MS = 300;
 
 type DiscordConversationContext = Omit<ConversationContext, 'blocks' | 'textBlockIndex'> & {
 	answerTextPartIndex: number;
 	bodyParts: string[];
-	/** Persisted id of the assistant message this turn produced, once the stream settles. */
-	answerMessageId?: string;
 };
 
 type DiscordAnswerMessageState = {
@@ -78,7 +83,6 @@ type DiscordAnswerMessageState = {
 class ProjectDiscordBot {
 	private readonly _bot: Chat;
 	private readonly _adapter: DiscordAdapter;
-	private readonly _emailByDiscordId: DiscordEmailCache = new Map();
 	private readonly _answerPostMutations = new Map<string, Promise<void>>();
 	private readonly _answerPostStates = new Map<string, DiscordAnswerMessageState>();
 	private _gatewayAbort: AbortController | null = null;
@@ -115,8 +119,6 @@ class ProjectDiscordBot {
 	}
 
 	public async stop(): Promise<void> {
-		// The gateway listener holds the only live connection. Interactions arrive as stateless HTTP
-		// requests, but a plain message only ever arrives over the gateway.
 		this._gatewayAbort?.abort();
 		this._gatewayAbort = null;
 		if (this._gatewayRetryTimer) {
@@ -128,10 +130,8 @@ class ProjectDiscordBot {
 	}
 
 	/**
-	 * Plain Discord messages are delivered over the gateway only -- the HTTP webhook carries
-	 * interactions (slash commands, buttons), never a normal message. Without a listener the bot
-	 * looks healthy in the UI and silently ignores every mention. No webhookUrl is passed, so the
-	 * adapter processes messages in-process rather than forwarding them to an HTTP endpoint.
+	 * Plain messages only arrive over the gateway; the HTTP webhook carries interactions only.
+	 * No webhookUrl is passed so the adapter processes gateway events in-process.
 	 */
 	private async _startGatewayListener(): Promise<void> {
 		const abort = new AbortController();
@@ -160,11 +160,6 @@ class ProjectDiscordBot {
 		}
 	}
 
-	/**
-	 * The adapter listens for its duration argument and then returns, so the listener has to be
-	 * started again when it ends. Without this the bot stays in _bots looking healthy while every
-	 * plain message is dropped, because only a config change or a process restart would start it.
-	 */
 	private async _restartGatewayListener(previous: AbortController): Promise<void> {
 		if (this._gatewayAbort !== previous || previous.signal.aborted) {
 			return;
@@ -184,11 +179,6 @@ class ProjectDiscordBot {
 		}
 	}
 
-	/**
-	 * ponytail: a fixed cadence, not backoff -- each attempt is a single API call and a start that
-	 * fails is usually the network, not rate limiting. The stop path clears the timer; move to
-	 * backoff if Discord ever starts rejecting the start call.
-	 */
 	private _scheduleGatewayRestart(): void {
 		const abort = this._gatewayAbort;
 		if (this._gatewayRetryTimer || !abort || abort.signal.aborted) {
@@ -198,7 +188,6 @@ class ProjectDiscordBot {
 			this._gatewayRetryTimer = null;
 			void this._restartGatewayListener(abort);
 		}, GATEWAY_RESTART_RETRY_MS);
-		// Never hold the process open for a retry.
 		this._gatewayRetryTimer.unref?.();
 	}
 
@@ -213,8 +202,7 @@ class ProjectDiscordBot {
 		this._bot.onNewMessage(/[\s\S]+/, handleMessage);
 
 		this._bot.onAction('stop_generation', async (event) => {
-			const threadId = event.thread?.id || event.threadId || '';
-			const actionChat = await this._resolveThreadChat(threadId);
+			const actionChat = await chatQueries.getChatByDiscordThread(event.thread?.id || event.threadId || '');
 			if (actionChat) {
 				agentService.get(actionChat.id)?.stop();
 			}
@@ -243,58 +231,44 @@ class ProjectDiscordBot {
 		});
 		const isExplicitMention = hasRawMention || (!isDirectMessage && message.isMention === true);
 		const needsThreadContext = authorType === 'human' && !isExplicitMention && (!isDirectMessage || isThreadReply);
-		const threadContext = needsThreadContext
-			? await this._resolveMessageThreadContext(thread)
-			: { hasExistingChat: false };
-		return shouldHandleDiscordMessage({
+		const hasExistingChat = needsThreadContext && Boolean(await chatQueries.getChatByDiscordThread(thread.id));
+		return shouldHandleMessage({
 			isDirectMessage,
 			isThreadReply,
 			isMention: isExplicitMention,
-			...threadContext,
+			hasExistingChat,
 			authorType,
 			isOwnMessage: message.author.isMe,
 		});
 	}
 
-	private async _resolveMessageThreadContext(thread: Thread): Promise<{ hasExistingChat: boolean }> {
-		const existingChat = await chatQueries.getChatByDiscordThread(thread.id);
-		return { hasExistingChat: Boolean(existingChat) };
-	}
-
-	private _resolveMessageAuthorType(message: Message): DiscordAuthorType {
-		if (message.author.isMe) {
-			return 'unknown';
-		}
+	private _resolveMessageAuthorType(message: Message): MessageAuthorType {
 		if (message.author.isBot === true) {
 			return 'bot';
 		}
-		if (message.author.isBot === false) {
-			return 'human';
-		}
-		return 'unknown';
+		return message.author.isBot === false ? 'human' : 'unknown';
 	}
 
 	private async _handleMessage(thread: Thread, message: Message): Promise<void> {
 		message.text = message.text.replace(/<@[!&]?\d+>\s*/g, '').trim();
 		const linkedUser = await this._resolveLinkedUser(message);
-		const loginCommand = getDiscordLoginCommandForUnlinkedUser(message.text, Boolean(linkedUser));
+		const loginCommand = getLoginCommandForUnlinkedUser(message.text, Boolean(linkedUser));
 		if (loginCommand) {
 			await this._handleLoginCommand(thread, message, loginCommand.code);
 			return;
 		}
-		await this._handleWorkflow(thread, message);
+		await this._handleWorkflow(thread, message, linkedUser ?? (await this._resolveFallbackUser()));
 	}
 
-	private async _handleWorkflow(thread: Thread, userMessage: Message): Promise<void> {
+	private async _handleWorkflow(thread: Thread, userMessage: Message, user: User | null): Promise<void> {
 		const ctx: DiscordConversationContext = {
 			thread,
 			userMessage,
-			user: null,
+			user,
 			chatId: '',
 			convMessage: null,
 			answerTextPartIndex: -1,
 			bodyParts: [],
-			answerMessageId: undefined,
 			textBlockCount: 0,
 			isNewChat: false,
 			modelId: undefined,
@@ -302,11 +276,14 @@ class ProjectDiscordBot {
 		};
 
 		try {
-			await this._validateUserAccess(ctx);
-			ctx.convMessage = await ctx.thread.post('✨ nao is answering...');
+			if (!(await this._validateUserAccess(ctx))) {
+				return;
+			}
+			await assertProjectCloudBillingAccess(this._config.projectId);
+			ctx.convMessage = await ctx.thread.post(DISCORD_ANSWERING_PLACEHOLDER);
 			this._answerPostStates.set(ctx.convMessage.id, {
 				sentMessage: ctx.convMessage,
-				message: '✨ nao is answering...',
+				message: DISCORD_ANSWERING_PLACEHOLDER,
 				stopAttached: false,
 				appliedStopAttached: false,
 			});
@@ -319,10 +296,12 @@ class ProjectDiscordBot {
 
 			await this._handleStreamAgent(chat, ctx);
 		} catch (error) {
+			const errorMessage = formatMessagingError(error);
 			if (!ctx.convMessage) {
+				await ctx.thread.post(errorMessage);
 				return;
 			}
-			ctx.bodyParts = [formatMessagingError(error)];
+			ctx.bodyParts = [errorMessage];
 			await this._editAnswerMessage(ctx);
 		} finally {
 			if (ctx.convMessage) {
@@ -333,19 +312,67 @@ class ProjectDiscordBot {
 		}
 	}
 
-	private async _validateUserAccess(ctx: DiscordConversationContext): Promise<void> {
-		await this._getUser(ctx);
-		await this._checkUserBelongsToProject(ctx);
+	private async _validateUserAccess(ctx: DiscordConversationContext): Promise<boolean> {
+		if (!ctx.user) {
+			await this._promptAccountLink(ctx.thread, ctx.userMessage.author);
+			return false;
+		}
+		const role = await projectQueries.getUserRoleInProject(this._config.projectId, ctx.user.id);
+		if (!canUseDiscordInProject(role)) {
+			await ctx.thread.post(
+				"❌ You don't have permission to use nao in this project. Please contact an administrator.",
+			);
+			return false;
+		}
+		return true;
+	}
+
+	public async sendDirectMessage(discordUserId: string, text: string): Promise<boolean> {
+		try {
+			const directMessageThreadId = await this._adapter.openDM(discordUserId);
+			await this._adapter.postMessage(directMessageThreadId, text);
+			return true;
+		} catch (error) {
+			logger.warn(`Could not send a Discord direct message: ${String(error)}`, {
+				source: 'system',
+				projectId: this._config.projectId,
+			});
+			return false;
+		}
+	}
+
+	private async _promptAccountLink(thread: Thread, author: Message['author']): Promise<void> {
+		if (!author.userId) {
+			await thread.post(DISCORD_LOGIN_CODE_PROMPT);
+			return;
+		}
+
+		const linkMessage = await this._buildAccountLinkMessage(author);
+		if (this._adapter.isDM(thread.id)) {
+			await thread.post(linkMessage);
+			return;
+		}
+
+		const sent = await this.sendDirectMessage(author.userId, linkMessage);
+		await thread.post(sent ? '👋 I sent you a direct message to connect your account.' : DISCORD_LOGIN_CODE_PROMPT);
+	}
+
+	private async _buildAccountLinkMessage(author: Message['author']): Promise<string> {
+		const token = generateDiscordLinkToken({
+			projectId: this._config.projectId,
+			discordUserId: author.userId,
+			discordUserName: author.userName || author.fullName,
+		});
+		const linkUrl = new URL('discord-link', this._config.redirectUrl);
+		linkUrl.searchParams.set('token', token);
+		const appName = escapeMarkdownText(await getAppName());
+		return `🔗 [Connect your Discord account to ${appName}](${linkUrl.toString()}), then ask your question again. This link expires in ${DISCORD_LINK_TOKEN_TTL_MINUTES} minutes.`;
 	}
 
 	private async _handleLoginCommand(thread: Thread, message: Message, code: string): Promise<void> {
-		const discordId = this._getDiscordId(message);
+		const discordId = message.author.userId;
 		if (!discordId) {
 			await thread.post('❌ Could not retrieve your Discord identity.');
-			return;
-		}
-		if (!code) {
-			await thread.post('❌ Invalid code. Usage: `login <your-code>`');
 			return;
 		}
 
@@ -355,9 +382,6 @@ class ProjectDiscordBot {
 			return;
 		}
 
-		// A code proves the account, not that it belongs in this project. Linking a user who cannot
-		// use it here would deny every message afterwards, and the author cannot relink because the
-		// parser ignores `login` from an already-linked Discord user.
 		const role = await projectQueries.getUserRoleInProject(this._config.projectId, user.id);
 		if (!canUseDiscordInProject(role)) {
 			await thread.post('❌ That nao account does not have access to this project. Ask an administrator.');
@@ -369,82 +393,22 @@ class ProjectDiscordBot {
 			discordUserId: discordId,
 			userId: user.id,
 		});
-		cacheDiscordEmail(this._emailByDiscordId, discordId, user.email);
 		await thread.post(`✅ Linked to ${user.email}. You can now send messages to nao!`);
 	}
 
-	private _getDiscordId(message: Message): string | null {
-		return message.author.userId || null;
-	}
-
-	private async _getUser(ctx: DiscordConversationContext): Promise<void> {
-		const discordId = this._getDiscordId(ctx.userMessage);
+	/** Discord never exposes member emails, so a persisted link (magic link or `login <code>`) is the only way to match a user. */
+	private async _resolveLinkedUser(message: Message): Promise<User | null> {
+		const discordId = message.author.userId;
 		if (!discordId) {
-			throw new Error('Could not retrieve user identity from Discord');
+			return null;
 		}
-
-		const user = (await this._resolveLinkedUser(ctx.userMessage)) ?? (await this._resolveFallbackUser());
-		if (!user) {
-			await ctx.thread.post(
-				'👋 I could not match your Discord account. Send `login <your-code>` to link manually. Find your code in project settings.',
-			);
-			throw new Error('User not linked');
-		}
-		ctx.user = user;
+		const link = await discordLinkQueries.getLinkedDiscordUser(this._config.projectId, discordId);
+		return link ? getUser({ id: link.userId }) : null;
 	}
 
-	/**
-	 * Discord never exposes member emails, so no member can link automatically. A community server
-	 * can nominate one nao user as the shared identity, and messages from unlinked members are then
-	 * answered as that user. Per-person attribution is deliberately given up -- that is the trade.
-	 */
 	private async _resolveFallbackUser(): Promise<User | null> {
 		const fallbackUserId = this._config.fallbackUserId;
-		if (!fallbackUserId) {
-			return null;
-		}
-		return getUser({ id: fallbackUserId });
-	}
-
-	private async _resolveLinkedUser(message: Message): Promise<User | null> {
-		const discordId = this._getDiscordId(message);
-		if (!discordId) {
-			return null;
-		}
-		try {
-			// The persisted link first: it is the only thing that survives a bot restart, since
-			// Discord cannot supply the member's email a second time.
-			const link = await discordLinkQueries.getLinkedDiscordUser(this._config.projectId, discordId);
-			if (link) {
-				const linkedUser = await getUser({ id: link.userId });
-				if (linkedUser) {
-					cacheDiscordEmail(this._emailByDiscordId, discordId, linkedUser.email);
-					return linkedUser;
-				}
-			}
-			return await resolveDiscordAccount({
-				userId: discordId,
-				emailCache: this._emailByDiscordId,
-				fetchEmail: () => fetchDiscordUserEmail({ adapter: this._adapter, userId: discordId }),
-				findUser: (email) => getUser({ email }),
-			});
-		} catch (error) {
-			logger.warn(`Failed to resolve Discord user email: ${String(error)}`, {
-				source: 'system',
-				projectId: this._config.projectId,
-			});
-			return null;
-		}
-	}
-
-	private async _checkUserBelongsToProject(ctx: DiscordConversationContext): Promise<void> {
-		const role = await projectQueries.getUserRoleInProject(this._config.projectId, ctx.user!.id);
-		if (!canUseDiscordInProject(role)) {
-			await ctx.thread.post(
-				"❌ You don't have permission to use nao in this project. Please contact an administrator.",
-			);
-			throw new Error('User does not have permission to access this project');
-		}
+		return fallbackUserId ? getUser({ id: fallbackUserId }) : null;
 	}
 
 	private async _saveOrUpdateUserMessage(ctx: DiscordConversationContext): Promise<void> {
@@ -484,25 +448,15 @@ class ProjectDiscordBot {
 			if (answerPostId) {
 				await this._setStopAttachment(answerPostId, true);
 			}
-			await this._readStreamAndUpdateMessage(stream, ctx);
+			const { lastMessage } = await this._readStreamAndUpdateMessage(stream, ctx);
 
-			const chatUrl = new URL(ctx.chatId, this._config.redirectUrl).toString();
-			const overflowAttached = await this._attachAnswerOverflow(ctx, chatUrl);
-			await this._editAnswerMessageFailSoft(ctx, chatUrl, overflowAttached);
+			const answerUrl = this._config.hideAnswerLink ? undefined : this._getChatUrl(ctx);
+			const overflowAttached = await this._attachAnswerOverflow(ctx, answerUrl);
+			await this._editAnswerMessageFailSoft(ctx, answerUrl, overflowAttached);
 			if (answerPostId) {
 				await this._setStopAttachment(answerPostId, false);
 			}
-			await this._recordAnswerMessage(answerPostId, ctx.answerMessageId);
-			await this._seedFeedbackReactions(ctx);
-
-			posthog.capture(ctx.user!.id, PostHogEvent.MessageSent, {
-				project_id: this._config.projectId,
-				chat_id: ctx.chatId,
-				model_id: ctx.modelId,
-				is_new_chat: ctx.isNewChat,
-				source: 'discord',
-				domain_host: new URL(this._config.redirectUrl).host,
-			});
+			await this._attachAnswerAndSeedReactions(ctx, lastMessage?.id);
 		} finally {
 			if (answerPostId) {
 				await this._setStopAttachment(answerPostId, false);
@@ -517,10 +471,18 @@ class ProjectDiscordBot {
 		const agent = await agentService.create(
 			{ ...chat, userId: ctx.user!.id, projectId: this._config.projectId },
 			this._config.modelSelection,
-			{ supportsCustomCharts: false },
+			{ billingAccessVerifiedProjectId: this._config.projectId, supportsCustomCharts: false },
 		);
 		ctx.modelId = agent.getModelId();
-		return agent.stream(chat.messages, { provider: 'discord', timezone: ctx.timezone });
+		return agent.stream(chat.messages, {
+			provider: 'discord',
+			timezone: ctx.timezone,
+			tracking: {
+				source: 'discord',
+				isNewChat: ctx.isNewChat,
+				domainHost: new URL(this._config.redirectUrl).host,
+			},
+		});
 	}
 
 	private async _readStreamAndUpdateMessage(
@@ -570,27 +532,25 @@ class ProjectDiscordBot {
 		}
 
 		await this._sendFinalText(ctx);
-		ctx.answerMessageId = lastMessage?.id;
 		return { ...state, lastMessage };
 	}
 
 	private async _editAnswerMessage(
 		ctx: DiscordConversationContext,
-		chatUrl?: string,
+		answerUrl?: string,
 		overflowAttached = false,
 	): Promise<void> {
 		const answerMessage = ctx.convMessage;
 		if (!answerMessage) {
 			return;
 		}
-		// Community servers can drop the footer link: it points at a UI those members may not have access to.
-		const answerUrl = this._config.hideAnswerLink ? undefined : chatUrl;
-		const body = truncateDiscordMarkdown(
+		const appName = await getAppName();
+		const body = truncateMarkdown(
 			this._renderBody(ctx),
-			this._answerPostBudget(answerUrl),
+			this._getAnswerPostBudget(answerUrl, appName),
 			overflowAttached ? DISCORD_ATTACHMENT_NOTICE : undefined,
 		);
-		const message = createDiscordAnswerMessage(body, answerUrl).markdown;
+		const message = createMarkdownAnswerMessage(body, answerUrl, appName).markdown;
 		await this._patchAnswerPost(answerMessage.id, (state) => {
 			state.message = message;
 		});
@@ -598,11 +558,11 @@ class ProjectDiscordBot {
 
 	private async _editAnswerMessageFailSoft(
 		ctx: DiscordConversationContext,
-		chatUrl?: string,
+		answerUrl?: string,
 		overflowAttached = false,
 	): Promise<boolean> {
 		try {
-			await this._editAnswerMessage(ctx, chatUrl, overflowAttached);
+			await this._editAnswerMessage(ctx, answerUrl, overflowAttached);
 			return true;
 		} catch (error) {
 			logger.warn(`Failed to update Discord answer message: ${String(error)}`, {
@@ -613,31 +573,25 @@ class ProjectDiscordBot {
 		}
 	}
 
-	/** What the answer post holds: Discord's content cap minus the footer link it has to carry. */
-	private _answerPostBudget(answerUrl: string | undefined): number {
-		const linkLength = answerUrl ? createDiscordAnswerMessage('', answerUrl).markdown.length + 2 : 0;
+	private _getAnswerPostBudget(answerUrl: string | undefined, appName: string): number {
+		const linkLength = answerUrl ? createMarkdownAnswerMessage('', answerUrl, appName).markdown.length + 2 : 0;
 		return Math.max(DISCORD_POST_MAX_LENGTH - linkLength, 0);
 	}
 
-	/**
-	 * Uploads the whole answer when the post had to truncate it. Called ONCE, after the stream ends --
-	 * the streaming edits would otherwise post a fresh copy on every tool tick. Fail-soft: the post
-	 * already carries the nao link, so a failed upload costs the reader nothing beyond today's output.
-	 */
-	private async _attachAnswerOverflow(ctx: DiscordConversationContext, chatUrl?: string): Promise<boolean> {
-		// No answer post means the body is not on screen either; a bare file would be the only trace.
+	/** Uploads the whole answer as a file when it does not fit in a single Discord post. */
+	private async _attachAnswerOverflow(ctx: DiscordConversationContext, answerUrl?: string): Promise<boolean> {
 		if (!ctx.convMessage) {
 			return false;
 		}
-		const answerUrl = this._config.hideAnswerLink ? undefined : chatUrl;
-		const attachment = createDiscordAnswerAttachment(this._renderBody(ctx), this._answerPostBudget(answerUrl));
+		const appName = await getAppName();
+		const attachment = createDiscordAnswerAttachment(
+			this._renderBody(ctx),
+			this._getAnswerPostBudget(answerUrl, appName),
+		);
 		if (!attachment) {
 			return false;
 		}
 		try {
-			// Captioned, not bare: the "attached below" notice is a separate edit that can fail, and a
-			// bare answer.md under a post still saying "open the full result in nao" reads as a stray
-			// file. The caption has to stand on its own.
 			await ctx.thread.post({
 				markdown: "📄 **The full answer** — the post above was truncated to fit Discord's limit.",
 				files: [attachment],
@@ -688,7 +642,7 @@ class ProjectDiscordBot {
 	}
 
 	private async _resolveSqlOutput(queryId: string, chatId: string, state: StreamState) {
-		const sqlOutput = await resolveDiscordSqlOutput({
+		const sqlOutput = await resolveSqlOutput({
 			queryId,
 			sqlOutputs: state.sqlOutputs,
 			loadPersisted: async (persistedQueryId) => {
@@ -728,13 +682,13 @@ class ProjectDiscordBot {
 			return;
 		}
 		if (displayChart.isTableInput(part.input)) {
-			const table = createDiscordMarkdownTable({ title: part.input.title ?? 'Results', rows: sqlOutput.rows });
+			const table = createMarkdownTable({ title: part.input.title ?? 'Results', rows: sqlOutput.rows });
 			if (!table) {
 				return;
 			}
 			state.renderedToolCallIds.add(part.toolCallId);
 			ctx.answerTextPartIndex = -1;
-			ctx.bodyParts.push(table);
+			ctx.bodyParts.push(formatDiscordTable(table));
 			await this._editAnswerMessageFailSoft(ctx);
 			return;
 		}
@@ -759,8 +713,10 @@ class ProjectDiscordBot {
 			});
 			state.renderedToolCallIds.add(part.toolCallId);
 			ctx.answerTextPartIndex = -1;
-			const chatUrl = new URL(ctx.chatId, this._config.redirectUrl).toString();
-			ctx.bodyParts.push(`⚠️ This chart couldn't be rendered in Discord. [Open it in nao](${chatUrl}).`);
+			const appName = await getAppName();
+			ctx.bodyParts.push(
+				`⚠️ This chart couldn't be rendered in Discord. [Open it in ${escapeMarkdownText(appName)}](${this._getChatUrl(ctx)}).`,
+			);
 			try {
 				await this._editAnswerMessage(ctx);
 			} catch (editError) {
@@ -814,9 +770,11 @@ class ProjectDiscordBot {
 			return;
 		}
 		try {
-			const chatUrl = new URL(ctx.chatId, this._config.redirectUrl).toString();
+			const appName = await getAppName();
 			ctx.answerTextPartIndex = -1;
-			ctx.bodyParts.push(`🗺️ **${part.input.title}**\n\n[View interactive map in nao](${chatUrl})`);
+			ctx.bodyParts.push(
+				`🗺️ **${part.input.title}**\n\n[View interactive map in ${escapeMarkdownText(appName)}](${this._getChatUrl(ctx)})`,
+			);
 			await this._editAnswerMessage(ctx);
 		} catch (error) {
 			logger.error(`Error rendering Discord map link: ${String(error)}`, {
@@ -889,9 +847,8 @@ class ProjectDiscordBot {
 		return ctx.bodyParts.filter(Boolean).join('\n\n');
 	}
 
-	/** The Stop action rides along with the answer message; Discord interactions carry no callback secret. */
-	private _buildAnswerPostable(state: DiscordAnswerMessageState): AdapterPostableMessage {
-		return buildDiscordAnswerPostable(state.message, state.stopAttached);
+	private _getChatUrl(ctx: DiscordConversationContext): string {
+		return new URL(ctx.chatId, this._config.redirectUrl).toString();
 	}
 
 	private async _setStopAttachment(postId: string, enabled: boolean): Promise<void> {
@@ -917,18 +874,21 @@ class ProjectDiscordBot {
 	private async _patchAnswerPost(
 		postId: string,
 		updateState: (state: DiscordAnswerMessageState) => boolean | void,
-	): Promise<boolean> {
-		let patched = false;
+	): Promise<void> {
 		await this._mutateAnswerPost(postId, async () => {
 			const state = this._answerPostStates.get(postId);
 			if (!state || updateState(state) === false) {
 				return;
 			}
-			await state.sentMessage.edit(this._buildAnswerPostable(state));
+			const { channelId, threadId } = this._adapter.decodeThreadId(state.sentMessage.threadId);
+			await editDiscordMessage({
+				botToken: this._config.botToken,
+				channelId: threadId || channelId,
+				messageId: state.sentMessage.id,
+				payload: buildDiscordAnswerPayload(state.message, state.stopAttached),
+			});
 			state.appliedStopAttached = state.stopAttached;
-			patched = true;
 		});
-		return patched;
 	}
 
 	private async _mutateAnswerPost(postId: string, mutation: () => Promise<void>): Promise<void> {
@@ -944,35 +904,14 @@ class ProjectDiscordBot {
 		}
 	}
 
-	private async _seedFeedbackReactions(ctx: DiscordConversationContext): Promise<void> {
-		const message = ctx.convMessage;
-		if (!message) {
-			return;
-		}
-		const results = await Promise.allSettled([
-			this._adapter.addReaction(ctx.thread.id, message.id, DISCORD_THUMBS_UP),
-			this._adapter.addReaction(ctx.thread.id, message.id, DISCORD_THUMBS_DOWN),
-		]);
-		if (results.some((result) => result.status === 'rejected')) {
-			logger.warn('Failed to seed one or more Discord feedback reactions', {
-				source: 'system',
-				projectId: this._config.projectId,
-			});
-		}
-	}
-
-	/**
-	 * Reactions can land on any answer in a Discord thread, so remember which assistant message a
-	 * posted answer carries instead of assuming the thread's newest one. Best effort: a failure here
-	 * must not fail the answer that has already been rendered.
-	 */
-	private async _recordAnswerMessage(
-		postId: string | undefined,
+	private async _attachAnswerAndSeedReactions(
+		ctx: DiscordConversationContext,
 		assistantMessageId: string | undefined,
 	): Promise<void> {
-		if (!postId || !assistantMessageId) {
+		if (!ctx.convMessage || !assistantMessageId) {
 			return;
 		}
+		const postId = ctx.convMessage.id;
 		try {
 			await chatQueries.attachDiscordMessageId(assistantMessageId, postId);
 		} catch (error) {
@@ -980,6 +919,17 @@ class ProjectDiscordBot {
 				source: 'system',
 				projectId: this._config.projectId,
 				context: { postId, assistantMessageId },
+			});
+			return;
+		}
+		try {
+			await this._adapter.addReaction(ctx.thread.id, postId, DISCORD_THUMBS_UP);
+			await new Promise((resolve) => setTimeout(resolve, REACTION_SEED_INTERVAL_MS));
+			await this._adapter.addReaction(ctx.thread.id, postId, DISCORD_THUMBS_DOWN);
+		} catch (error) {
+			logger.warn(`Failed to seed Discord feedback reactions: ${String(error)}`, {
+				source: 'system',
+				projectId: this._config.projectId,
 			});
 		}
 	}
@@ -1017,11 +967,6 @@ class ProjectDiscordBot {
 			});
 		}
 	}
-
-	private async _resolveThreadChat(threadId: string): Promise<{ id: string; title: string } | null> {
-		const chat = await chatQueries.getChatByDiscordThread(threadId);
-		return chat ?? null;
-	}
 }
 
 class DiscordService {
@@ -1048,12 +993,10 @@ class DiscordService {
 	}
 
 	public async syncProject(config: DiscordConfig | null, projectId: string): Promise<void> {
-		if (!config) {
-			await this.stopProject(projectId);
-			return;
-		}
 		await this.stopProject(projectId);
-		await this.startForProject(config);
+		if (config) {
+			await this.startForProject(config);
+		}
 	}
 
 	public async stopProject(projectId: string): Promise<void> {
@@ -1091,6 +1034,12 @@ class DiscordService {
 
 	public getAdapter(projectId: string): DiscordAdapter | null {
 		return this._bots.get(projectId)?.adapter ?? null;
+	}
+
+	public async notifyAccountLinked(projectId: string, discordUserId: string, email: string): Promise<void> {
+		await this._bots
+			.get(projectId)
+			?.sendDirectMessage(discordUserId, `✅ Linked to ${email}. You can now ask me questions!`);
 	}
 
 	private _configChanged(current: DiscordConfig, next: DiscordConfig): boolean {

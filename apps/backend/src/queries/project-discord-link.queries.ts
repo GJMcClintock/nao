@@ -3,11 +3,6 @@ import { and, eq } from 'drizzle-orm';
 import s from '../db/abstractSchema';
 import { db } from '../db/db';
 
-/**
- * Discord never exposes a member's email, so a `login <code>` link is the only durable way to
- * attribute a message to a nao user -- and it cannot be derived again after a restart. Every
- * settings change recreates the bot, so the association is persisted rather than cached.
- */
 export const getLinkedDiscordUser = async (
 	projectId: string,
 	discordUserId: string,

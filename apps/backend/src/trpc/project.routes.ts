@@ -116,6 +116,31 @@ const httpUrlSchema = z.url().refine((value) => ['http:', 'https:'].includes(new
 	message: 'Enter a valid HTTP or HTTPS URL',
 });
 
+function toDiscordConfigResponse(config: discordConfigQueries.DiscordConfig) {
+	return {
+		applicationId: config.applicationId,
+		botTokenPreview: config.botToken.slice(0, 4) + '...' + config.botToken.slice(-4),
+		publicKey: config.publicKey,
+		modelSelection: config.modelSelection,
+		mentionRoleIds: config.mentionRoleIds ?? [],
+		respondToChannelIds: config.respondToChannelIds ?? [],
+		fallbackUserEmail: config.fallbackUserEmail ?? '',
+		hideAnswerLink: config.hideAnswerLink ?? false,
+	};
+}
+
+async function resolveDiscordFallbackUser(projectId: string, email: string) {
+	const user = await userQueries.getUser({ email });
+	if (!user) {
+		throw new TRPCError({ code: 'BAD_REQUEST', message: `No user found with the email ${email}.` });
+	}
+	const role = await projectQueries.getUserRoleInProject(projectId, user.id);
+	if (!canUseDiscordInProject(role)) {
+		throw new TRPCError({ code: 'BAD_REQUEST', message: `${email} does not have access to this project.` });
+	}
+	return user;
+}
+
 async function validateBoundarySource(url: string): Promise<number> {
 	try {
 		const text = await safeFetch(url);
@@ -682,27 +707,16 @@ export const projectRoutes = {
 
 	getDiscordConfig: projectProtectedProcedure.query(async ({ ctx }) => {
 		if (!ctx.project) {
-			return { projectConfig: null, projectId: '', connected: false };
+			return { projectConfig: null, projectId: '', connected: false, webhookUrl: '' };
 		}
 
 		const config = await discordConfigQueries.getProjectDiscordConfig(ctx.project.id);
-		const projectConfig = config
-			? {
-					applicationId: config.applicationId,
-					botTokenPreview: config.botToken.slice(0, 4) + '...' + config.botToken.slice(-4),
-					publicKey: config.publicKey,
-					modelSelection: config.modelSelection,
-					mentionRoleIds: config.mentionRoleIds ?? [],
-					respondToChannelIds: config.respondToChannelIds ?? [],
-					fallbackUserEmail: config.fallbackUserEmail ?? '',
-					hideAnswerLink: config.hideAnswerLink ?? false,
-				}
-			: null;
-
+		const baseUrl = env.BETTER_AUTH_URL || 'http://localhost:3000';
 		return {
-			projectConfig,
+			projectConfig: config ? toDiscordConfigResponse(config) : null,
 			projectId: ctx.project.id,
 			connected: discordService.getAdapter(ctx.project.id) !== null,
+			webhookUrl: `${baseUrl}/api/webhooks/discord/${ctx.project.id}`,
 		};
 	}),
 
@@ -719,7 +733,7 @@ export const projectRoutes = {
 				modelId: z.string().optional(),
 				mentionRoleIds: z.array(z.string()).optional(),
 				respondToChannelIds: z.array(z.string()).optional(),
-				fallbackUserEmail: z.string().trim().optional(),
+				fallbackUserEmail: z.string().trim().toLowerCase().optional(),
 				hideAnswerLink: z.boolean().optional(),
 			}),
 		)
@@ -736,32 +750,14 @@ export const projectRoutes = {
 				});
 			}
 
-			const fallbackUserEmail = input.fallbackUserEmail || undefined;
-			const fallbackUser = fallbackUserEmail ? await userQueries.getUserByEmail(fallbackUserEmail) : null;
-			const fallbackUserRole = fallbackUser
-				? await projectQueries.getUserRoleInProject(ctx.project.id, fallbackUser.id)
+			const fallbackUser = input.fallbackUserEmail
+				? await resolveDiscordFallbackUser(ctx.project.id, input.fallbackUserEmail)
 				: null;
-			if (fallbackUserEmail && !canUseDiscordInProject(fallbackUserRole)) {
-				throw new TRPCError({
-					code: 'BAD_REQUEST',
-					message: fallbackUser
-						? `${fallbackUserEmail} does not have access to this project.`
-						: `No user found with the email ${fallbackUserEmail}.`,
-				});
-			}
-
 			const config = await discordConfigQueries.upsertProjectDiscordConfig({
+				...input,
 				projectId: ctx.project.id,
-				botToken: input.botToken,
-				applicationId: input.applicationId,
-				publicKey: input.publicKey,
-				modelProvider: input.modelProvider,
-				modelId: input.modelId,
-				mentionRoleIds: input.mentionRoleIds,
-				respondToChannelIds: input.respondToChannelIds,
 				fallbackUserId: fallbackUser?.id,
-				fallbackUserEmail,
-				hideAnswerLink: input.hideAnswerLink,
+				fallbackUserEmail: fallbackUser?.email,
 			});
 			try {
 				await discordService.syncProject(config, ctx.project.id);
@@ -778,38 +774,17 @@ export const projectRoutes = {
 				modelId: input.modelId,
 			});
 
-			return {
-				applicationId: config.applicationId,
-				botTokenPreview: config.botToken.slice(0, 4) + '...' + config.botToken.slice(-4),
-				publicKey: config.publicKey,
-				modelSelection: config.modelSelection,
-				mentionRoleIds: config.mentionRoleIds ?? [],
-				respondToChannelIds: config.respondToChannelIds ?? [],
-				fallbackUserEmail: config.fallbackUserEmail ?? '',
-			};
+			return toDiscordConfigResponse(config);
 		}),
 
 	updateDiscordModelConfig: adminProtectedProcedure
-		.input(
-			z.object({
-				modelProvider: llmProviderSchema.optional(),
-				modelId: z.string().optional(),
-			}),
-		)
-		.mutation(async ({ ctx, input }) => {
-			await discordConfigQueries.updateProjectDiscordModel(
-				ctx.project.id,
-				input.modelProvider ?? null,
-				input.modelId ?? null,
-			);
-			const refreshedConfig = await discordConfigQueries.getProjectDiscordConfig(ctx.project.id);
-			await discordService.syncProject(refreshedConfig, ctx.project.id);
-		}),
+		.input(integrationModelInputSchema)
+		.mutation(({ ctx, input }) =>
+			updateIntegrationModel(ctx.project.id, 'discord', toIntegrationModelSelection(input)),
+		),
 
 	deleteDiscordConfig: adminProtectedProcedure.mutation(async ({ ctx }) => {
 		await discordConfigQueries.deleteProjectDiscordConfig(ctx.project.id);
-		// Stop first: the gateway is still delivering messages until it is stopped, and a `login`
-		// that arrives in that window would write a link back after the cleanup below.
 		await discordService.stopProject(ctx.project.id);
 		await discordLinkQueries.deleteLinkedDiscordUsers(ctx.project.id);
 		return { success: true };

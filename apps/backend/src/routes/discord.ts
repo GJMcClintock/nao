@@ -4,8 +4,6 @@ import { logger } from '../utils/logger';
 import { convertHeaders } from '../utils/utils';
 
 export const discordRoutes = async (app: App) => {
-	// Discord signs every interaction with its Ed25519 key, so the adapter must
-	// verify the exact bytes Discord sent — keep the raw body, do not re-encode.
 	app.post('/:projectId', { config: { rawBody: true } }, async (request, reply) => {
 		const { projectId } = request.params as { projectId: string };
 

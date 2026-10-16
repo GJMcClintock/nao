@@ -133,7 +133,7 @@ export const createTelegramCompletionCard = (chatUrl: string, options: Completio
 	});
 };
 
-export const createMattermostAnswerMessage = (
+export const createMarkdownAnswerMessage = (
 	markdown: string,
 	chatUrl?: string,
 	appName = DEFAULT_APP_NAME,
@@ -150,10 +150,6 @@ export const createMattermostAnswerMessage = (
 export function escapeMarkdownText(text: string): string {
 	return text.replace(/[\\`*_[\]()~<>|]/g, '\\$&');
 }
-
-// Identical to the Mattermost postable: a plain markdown answer with the nao footer. Aliased rather
-// than copied so the footer (and its truncation budget) stays defined in one place.
-export const createDiscordAnswerMessage = createMattermostAnswerMessage;
 
 export const createTextBlock = (text: string): CardChild => {
 	const rendered = mdToMrkdwn(text);

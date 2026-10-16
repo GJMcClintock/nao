@@ -16,7 +16,7 @@ const PROVIDER_LABELS: Record<MessagingProvider, { name: string; loginHint: stri
 	discord: {
 		name: 'Discord',
 		loginHint:
-			'Send `login <code>` to the bot to link your account. Discord does not expose member emails to bots, so linking is always manual.',
+			'Mention the bot and it will send you a connect link by direct message. If your direct messages are closed, send `login <code>` to the bot instead.',
 		setupHint: 'An admin still needs to finish the Discord bot setup.',
 	},
 	mattermost: {
@@ -67,14 +67,12 @@ export function LinkingCodesCard({ provider }: LinkingCodesCardProps) {
 	const regenerateCode = useMutation(trpc.project.regenerateCurrentUserMessagingProviderCode.mutationOptions());
 	const unlinkWhatsapp = useMutation(trpc.project.unlinkCurrentUserWhatsappLink.mutationOptions());
 
-	const configQuery =
-		provider === 'whatsapp'
-			? whatsappConfig
-			: provider === 'telegram'
-				? telegramConfig
-				: provider === 'mattermost'
-					? mattermostConfig
-					: discordConfig;
+	const configQuery = {
+		whatsapp: whatsappConfig,
+		telegram: telegramConfig,
+		mattermost: mattermostConfig,
+		discord: discordConfig,
+	}[provider];
 	const isConfigured = Boolean(configQuery.data?.projectConfig);
 	const code = currentCode.data ?? '';
 	const [copied, setCopied] = useState(false);

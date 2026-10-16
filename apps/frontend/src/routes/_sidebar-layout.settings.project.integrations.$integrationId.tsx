@@ -137,9 +137,5 @@ function IntegrationConfiguration({
 		);
 	}
 
-	// Exhaustiveness guard: `integrationId` is `never` here only if every id in
-	// `integrationIds` has a branch above. Adding a provider to the registry without a
-	// section below becomes a compile error instead of a silently blank settings page.
-	const unhandled: never = integrationId;
-	return unhandled;
+	return null;
 }

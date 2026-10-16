@@ -8,8 +8,10 @@ CREATE TABLE "project_discord_link" (
 );
 --> statement-breakpoint
 ALTER TABLE "chat" ADD COLUMN "discord_thread_id" text;--> statement-breakpoint
+ALTER TABLE "chat_message" ADD COLUMN "discord_message_id" text;--> statement-breakpoint
 ALTER TABLE "project" ADD COLUMN "discord_settings" jsonb;--> statement-breakpoint
 ALTER TABLE "project_discord_link" ADD CONSTRAINT "project_discord_link_project_id_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."project"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_discord_link" ADD CONSTRAINT "project_discord_link_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "project_discord_link_userId_idx" ON "project_discord_link" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "chat_discord_thread_idx" ON "chat" USING btree ("discord_thread_id");
+CREATE INDEX "chat_discord_thread_idx" ON "chat" USING btree ("discord_thread_id");--> statement-breakpoint
+CREATE INDEX "chat_message_discordMessageId_idx" ON "chat_message" USING btree ("discord_message_id");

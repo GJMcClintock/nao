@@ -91,9 +91,8 @@ export function DiscordForm({
 						</a>
 						<span>
 							{' '}
-							Discord interactions are delivered to this nao instance and verified with the application
-							public key. Discord does not expose member emails, so each member links once by sending
-							`login &lt;code&gt;` to the bot -- or set a fallback user below.
+							Discord does not expose member emails, so each member links once by sending `login
+							&lt;code&gt;` to the bot, or you can set a fallback user below.
 						</span>
 					</p>
 					<PasswordField
@@ -139,11 +138,8 @@ export function DiscordForm({
 						hint='optional'
 					/>
 					<p className='text-[11px] text-muted-foreground leading-relaxed -mt-2'>
-						Discord-specific. Discord does not give bots member emails, so nobody can link automatically and
-						each member must send their linking code once. On a community server where that is not
-						practical, name one nao user here: every message from an unlinked member is then answered as
-						that user. Answers, history and feedback all belong to them, and anyone able to mention the bot
-						can reach whatever that user can see -- so use a dedicated account, not your own.
+						Messages from unlinked members are answered as this user. Anyone who can mention the bot can
+						reach whatever this user can see, so use a dedicated account.
 					</p>
 					<form.Field name='hideAnswerLink'>
 						{(field: { state: { value: boolean }; handleChange: (v: boolean) => void }) => (
@@ -163,8 +159,7 @@ export function DiscordForm({
 									Do not add the "Open in nao" link to answers
 								</label>
 								<p className='text-[11px] text-muted-foreground leading-relaxed'>
-									Community servers: that footer link points members at a nao UI they may not have
-									access to. Turn it off to keep answers self-contained in Discord.
+									Useful on community servers where members do not have access to nao.
 								</p>
 							</div>
 						)}
