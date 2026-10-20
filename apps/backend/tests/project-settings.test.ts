@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import s from '../src/db/abstractSchema';
 import { db } from '../src/db/db';
+import { updateProjectDiscordModel } from '../src/queries/project-discord-config.queries';
 import { updateProjectSettings } from '../src/queries/project-settings.queries';
 
 // The query picks its transaction shape from `dbConfig.dialect`, so pin the dialect to SQLite
@@ -81,5 +82,15 @@ describe('updateProjectSettings', () => {
 
 		const [project] = await db.select().from(s.project).where(eq(s.project.id, PROJECT_ID)).execute();
 		expect(project.slackSettings).toBeNull();
+	});
+
+	// The Discord connector landed on main after this fix and copied the old async form; routing it
+	// through the helper is what keeps that path transactional on SQLite.
+	it('updates the Discord model settings through the helper', async () => {
+		await updateProjectDiscordModel(PROJECT_ID, 'openai', 'gpt-4o-mini');
+
+		const [project] = await db.select().from(s.project).where(eq(s.project.id, PROJECT_ID)).execute();
+		expect(project.discordSettings?.discordLlmModelId).toBe('gpt-4o-mini');
+		expect(project.discordSettings?.discordLlmProvider).toBe('openai');
 	});
 });
