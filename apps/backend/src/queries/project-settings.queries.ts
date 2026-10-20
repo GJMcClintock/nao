@@ -11,7 +11,8 @@ export type ProjectMessagingSettingsKey =
 	| 'teamsSettings'
 	| 'telegramSettings'
 	| 'mattermostSettings'
-	| 'whatsappSettings';
+	| 'whatsappSettings'
+	| 'discordSettings';
 
 const lockForUpdate = <Query extends { execute(): unknown }>(query: Query): Query =>
 	dbConfig.dialect === Dialect.Postgres ? (query as Query & Lockable<Query>).for('update') : query;
