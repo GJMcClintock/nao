@@ -11,6 +11,7 @@ import { registerNaoMcpApps } from './embed/ui-resources';
 import { registerAssetTools } from './tools/asset-tools';
 import { registerContextAdminTools } from './tools/context-admin-tools';
 import { registerContextLayerTools } from './tools/context-layer';
+import { registerMemberBudgetTools } from './tools/member-budget';
 import { registerSubAgentTools } from './tools/sub-agent';
 
 export async function createMcpServer(
@@ -50,6 +51,7 @@ export async function createMcpServer(
 	}
 
 	registerContextAdminTools(server, ctx);
+	await registerMemberBudgetTools(server, ctx);
 	registerNaoMcpApps(server);
 
 	return server;
