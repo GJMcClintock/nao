@@ -624,6 +624,13 @@
       "when": 1793008934831,
       "tag": "0088_managed_ai_usage_wallet",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1793009162861,
+      "tag": "0089_example_chat_allowance",
+      "breakpoints": true
     }
   ]
 }
