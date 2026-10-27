@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { requireOrganizationAdminCloud, requireUsageOrManagedAiAccess } from './route-guards';
+import { requireContextAdminOrAdmin } from './route-guards';
 
 const mocks = vi.hoisted(() => ({
 	ensureQueryData: vi.fn(),
@@ -29,34 +29,22 @@ vi.mock('@/main', () => ({
 	},
 }));
 
-describe('requireUsageOrManagedAiAccess', () => {
+describe('requireContextAdminOrAdmin', () => {
 	beforeEach(() => {
 		mocks.ensureQueryData.mockReset();
 	});
 
-	it.each(['admin', 'user', 'context_admin'])(
-		'allows a project %s without organization membership',
-		async (userRole) => {
-			mocks.ensureQueryData
-				.mockResolvedValueOnce({ userRole })
-				.mockResolvedValueOnce({ naoMode: 'cloud' })
-				.mockRejectedValueOnce(new Error('organization not found'));
+	it.each(['admin', 'context_admin'])('allows a project %s without organization membership', async (userRole) => {
+		mocks.ensureQueryData.mockResolvedValueOnce({ userRole });
 
-			await expect(requireUsageOrManagedAiAccess()).resolves.toBeUndefined();
-			expect(mocks.ensureQueryData).toHaveBeenCalledTimes(2);
-		},
-	);
-});
-
-describe('requireOrganizationAdminCloud', () => {
-	beforeEach(() => {
-		mocks.ensureQueryData.mockReset();
+		await expect(requireContextAdminOrAdmin()).resolves.toBeUndefined();
+		expect(mocks.ensureQueryData).toHaveBeenCalledTimes(1);
 	});
 
-	it('allows a cloud organization admin when billing is disabled', async () => {
-		const config = { naoMode: 'cloud', cloudBillingEnabled: false };
-		mocks.ensureQueryData.mockResolvedValueOnce(config).mockResolvedValueOnce({ role: 'admin' });
+	it('redirects a regular project user', async () => {
+		mocks.ensureQueryData.mockResolvedValueOnce({ userRole: 'user' });
 
-		await expect(requireOrganizationAdminCloud()).resolves.toBe(config);
+		await expect(requireContextAdminOrAdmin()).rejects.toBeDefined();
+		expect(mocks.ensureQueryData).toHaveBeenCalledTimes(1);
 	});
 });

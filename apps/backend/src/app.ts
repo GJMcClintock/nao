@@ -81,6 +81,7 @@ import { telegramRoutes } from './routes/telegram';
 import { testRoutes } from './routes/test';
 import { whatsappRoutes } from './routes/whatsapp';
 import { reconcileOrganizationSetupGrants } from './services/credit-grant.service';
+import { validateCreditTopUpConfiguration } from './services/credit-top-up.service';
 import { discordService } from './services/discord';
 import { ensureSystemExampleProject } from './services/example-project';
 import { startLicenseHeartbeat } from './services/license.service';
@@ -95,7 +96,13 @@ import { validateCloudBillingConfiguration } from './services/stripe.service';
 import { startWarehouseProvisioningReconciler } from './services/warehouse-provisioning';
 import { TrpcRouter, trpcRouter } from './trpc/router';
 import { createContext } from './trpc/trpc';
-import { BudgetExceededError, HandlerError, ManagedCreditsExhaustedError } from './utils/error';
+import {
+	BudgetExceededError,
+	ExampleChatAllowanceExhaustedError,
+	HandlerError,
+	ManagedCreditsExhaustedError,
+	OnboardingChatAllowanceExhaustedError,
+} from './utils/error';
 import { closeBrowser } from './utils/headless-browser';
 import { describeError, logger } from './utils/logger';
 import { drainInFlightRequests, isDraining, trackInFlightRequests } from './utils/request-drain';
@@ -148,6 +155,12 @@ app.setErrorHandler((error, request, reply) => {
 	}
 	if (error instanceof ManagedCreditsExhaustedError) {
 		return reply.status(error.code).send({ error: error.message, code: 'MANAGED_CREDITS_EXHAUSTED' });
+	}
+	if (error instanceof ExampleChatAllowanceExhaustedError) {
+		return reply.status(error.code).send({ error: error.message, code: 'EXAMPLE_CHAT_ALLOWANCE_EXHAUSTED' });
+	}
+	if (error instanceof OnboardingChatAllowanceExhaustedError) {
+		return reply.status(error.code).send({ error: error.message, code: 'ONBOARDING_CHAT_ALLOWANCE_EXHAUSTED' });
 	}
 	if (error instanceof HandlerError) {
 		return reply.status(error.code).send({ error: error.message });
@@ -442,7 +455,7 @@ app.setNotFoundHandler((request, reply) => {
 export const startServer = async (opts: { port: number; host: string }) => {
 	if (isCloud) {
 		if (isCloudBillingEnabled()) {
-			await validateCloudBillingConfiguration();
+			await Promise.all([validateCloudBillingConfiguration(), validateCreditTopUpConfiguration()]);
 		}
 		try {
 			await ensureSystemExampleProject();

@@ -65,7 +65,7 @@ describe('useSettingsSearch', () => {
 
 	afterEach(cleanup);
 
-	it.each(['Messages', 'Tokens', 'Cost'])('only returns %s to roles with usage access', (title) => {
+	it.each(['Messages', 'Tokens', 'Cost'])('returns %s to every role with usage access', (title) => {
 		const { result, rerender } = renderHook(() => useSettingsSearch(title));
 
 		expect(result.current.some((entry) => entry.title === title)).toBe(false);
@@ -74,18 +74,32 @@ describe('useSettingsSearch', () => {
 		rerender();
 
 		expect(result.current.some((entry) => entry.title === title)).toBe(true);
+
+		mocks.permissions.isContextAdmin = true;
+		rerender();
+
+		expect(result.current.some((entry) => entry.title === title)).toBe(true);
+
+		mocks.permissions.isAdmin = true;
+		rerender();
+
+		expect(result.current.some((entry) => entry.title === title)).toBe(true);
 	});
 
-	it('targets the credits-only page when cloud billing is disabled', () => {
+	it.each(['Balance', 'nao AI usage'])('only returns %s when cloud billing is enabled', (searchTitle) => {
 		mocks.isCloud = true;
 		Object.assign(mocks.permissions, { isOrgAdmin: true, isViewer: false });
-		const { result, rerender } = renderHook(() => useSettingsSearch('Balance'));
+		const { result, rerender } = renderHook(() => useSettingsSearch(searchTitle));
 
-		expect(result.current.find((entry) => entry.title === 'Balance')?.page).toBe('/settings/credits-wallet');
+		expect(result.current.some((entry) => entry.title === searchTitle)).toBe(false);
 
 		mocks.config.cloudBillingEnabled = true;
 		rerender();
 
-		expect(result.current.find((entry) => entry.title === 'Balance')?.page).toBe('/settings/organization/billing');
+		const billingEntry = result.current.find((entry) => entry.title === searchTitle);
+		expect(billingEntry?.page).toBe('/settings/organization/billing');
+		if (searchTitle === 'nao AI usage') {
+			expect(billingEntry?.search).toEqual({ creditsTab: 'usage' });
+		}
 	});
 });

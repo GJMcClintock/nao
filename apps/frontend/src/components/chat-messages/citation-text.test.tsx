@@ -38,6 +38,7 @@ const renderAnswer = (text: string, isStreaming = false) => {
 describe('AssistantTextWithCitation', () => {
 	afterEach(() => {
 		cleanup();
+		vi.restoreAllMocks();
 		mocks.copySupportRequest.mockReset();
 		mocks.submitSupportRequest.mockReset();
 	});
@@ -181,6 +182,21 @@ describe('AssistantTextWithCitation', () => {
 		expect((screen.getByRole('textbox', { name: 'Support request' }) as HTMLTextAreaElement).value).toBe('');
 	});
 
+	it.each([false, true])('opens alternate support links in-app while streaming is %s', (isStreaming) => {
+		renderAnswer('[Get help](<mailto:support@getnao.io>)', isStreaming);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Get help' }));
+		expect(screen.getByRole('textbox', { name: 'Support request' })).toBeDefined();
+	});
+
+	it.each([false, true])('preserves support links written as inline code while streaming is %s', (isStreaming) => {
+		const markdown = '[Contact support](mailto:support@getnao.io)';
+		const { container } = renderAnswer(`Use \`${markdown}\` in the message.`, isStreaming);
+
+		expect(container.querySelector('code')?.textContent).toBe(markdown);
+		expect(screen.queryByRole('button', { name: 'Contact support' })).toBeNull();
+	});
+
 	it('offers an email fallback when in-app support is unavailable', async () => {
 		mocks.copySupportRequest.mockResolvedValue(undefined);
 		mocks.submitSupportRequest.mockRejectedValue(
@@ -213,10 +229,20 @@ describe('AssistantTextWithCitation', () => {
 	it.each([
 		['Read the docs', 'https://docs.getnao.io'],
 		['Set up your project', '/onboarding'],
-	])('keeps the %s message action as a link', (label, href) => {
+	])('keeps the %s message action as plain markdown', (label, href) => {
 		renderAnswer(`[${label}](${href})`);
 
-		expect(screen.getByRole('link', { name: label }).getAttribute('data-slot')).toBeNull();
+		expect(screen.getByRole('button', { name: label }).getAttribute('data-slot')).toBeNull();
+	});
+
+	it.each([false, true])('keeps Streamdown link safety while streaming is %s', async (isStreaming) => {
+		const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+		renderAnswer('[Read the docs](https://docs.getnao.io)', isStreaming);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Read the docs' }));
+		expect(await screen.findByRole('heading', { name: 'Open external link?' })).toBeDefined();
+		fireEvent.click(screen.getByRole('button', { name: 'Open link' }));
+		expect(open).toHaveBeenCalledWith('https://docs.getnao.io/', '_blank', 'noreferrer');
 	});
 
 	it('clarifies the legacy Jaffle Shop limit message and removes its onboarding action', () => {
@@ -238,7 +264,7 @@ describe('AssistantTextWithCitation', () => {
 		);
 
 		expect(container.textContent).toContain(
-			'You’ve reached the chat limit for guided setup. Your progress is safe, and the setup actions on this page still work. If you need help debugging your setup.',
+			'You’ve reached the chat limit for guided setup. Your progress is safe. If you need help completing setup.',
 		);
 		expect(container.textContent?.trim().endsWith('Contact support')).toBe(true);
 	});

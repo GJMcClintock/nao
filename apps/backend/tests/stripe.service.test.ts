@@ -69,6 +69,11 @@ import type Stripe from 'stripe';
 
 import { __reloadEnvForTesting } from '../src/env';
 import {
+	createCreditTopUpCheckoutSession,
+	getCreditTopUpPurchase,
+	validateCreditTopUpConfiguration,
+} from '../src/services/credit-top-up.service';
+import {
 	__resetStripeForTesting,
 	cloudSubscriptionProjection,
 	createCloudCheckoutSession,
@@ -77,14 +82,12 @@ import {
 	createCloudPortalSession,
 	createCloudResubscribeSession,
 	createCloudTrialPlaceholderSubscription,
-	createCreditTopUpCheckoutSession,
 	findCloudSubscription,
 	findManagedCloudSubscription,
 	getCloudBillingPlans,
 	getCloudPrice,
 	getCloudSubscriptionCurrency,
 	getCloudUpcomingInvoice,
-	getCreditTopUpPurchase,
 	getStripeClient,
 	listCloudInvoices,
 	listCloudSubscriptions,
@@ -347,6 +350,15 @@ describe('validateCloudBillingConfiguration', () => {
 		}));
 
 		await expect(validateCloudBillingConfiguration()).rejects.toThrow('fixed $0 recurring licensed Price');
+	});
+});
+
+describe('validateCreditTopUpConfiguration', () => {
+	it('validates distinct active credit Products', async () => {
+		await expect(validateCreditTopUpConfiguration()).resolves.toBeUndefined();
+
+		expect(stripeMocks.retrieveProduct).toHaveBeenCalledWith('prod_credits');
+		expect(stripeMocks.retrieveProduct).toHaveBeenCalledWith('prod_platform_fee');
 	});
 });
 
@@ -669,11 +681,14 @@ describe('cloud Checkout', () => {
 		);
 	});
 
-	it('rejects initial Checkout when Stripe cannot preserve the remaining trial', async () => {
+	it('starts the subscription immediately when Stripe cannot preserve the remaining trial', async () => {
 		const now = new Date('2026-10-01T00:00:00.000Z');
-		const localTrialEnd = new Date('2026-10-02T00:00:00.000Z');
+		const localTrialEnd = new Date('2026-10-03T00:02:00.000Z');
 		vi.useFakeTimers();
 		vi.setSystemTime(now);
+		stripeMocks.createCheckoutSession.mockResolvedValue({
+			url: 'https://checkout.stripe.com/immediate',
+		});
 
 		try {
 			await expect(
@@ -683,12 +698,23 @@ describe('cloud Checkout', () => {
 					stripeCustomerId: 'cus_cloud',
 					trialEnd: localTrialEnd,
 				}),
-			).rejects.toThrow('Not enough time remains for Stripe Checkout to preserve this organization trial');
+			).resolves.toBe('https://checkout.stripe.com/immediate');
 		} finally {
 			vi.useRealTimers();
 		}
 
-		expect(stripeMocks.createCheckoutSession).not.toHaveBeenCalled();
+		const [params, options] = stripeMocks.createCheckoutSession.mock.calls[0] as [
+			Stripe.Checkout.SessionCreateParams,
+			{ idempotencyKey: string },
+		];
+		expect(params.subscription_data).toEqual({
+			metadata: { nao_org_id: 'org-id', nao_plan_key: 'cloud_monthly_v2' },
+		});
+		expect(params.metadata).not.toHaveProperty('nao_trial_end');
+		expect(params.custom_text?.submit?.message).toBe(
+			'Not enough time remains to preserve your free trial in Checkout, so your subscription starts when you confirm. The recurring price shown, including any promotion code discount, is charged today.',
+		);
+		expect(options.idempotencyKey).toBe('cloud-checkout-initial-v12:org-id:cloud_monthly_v2:usd:immediate');
 	});
 
 	it('expires an open monthly Checkout before creating a yearly Checkout', async () => {

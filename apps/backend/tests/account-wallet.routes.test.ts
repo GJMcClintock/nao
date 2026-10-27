@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 	getOrganizationSetupCreditGrant: vi.fn(),
 	listCreditLedger: vi.fn(),
 	listManagedAiUsage: vi.fn(),
+	getUserOrgMembership: vi.fn(),
+	getUserOrgMembershipByProject: vi.fn(),
 }));
 
 vi.mock('../src/auth', () => ({
@@ -32,12 +34,8 @@ vi.mock('../src/queries/managed-ai-usage.queries', () => ({
 }));
 
 vi.mock('../src/queries/organization.queries', () => ({
-	getUserOrgMembership: vi.fn(async () => ({
-		orgId: 'org-id',
-		userId: 'user-id',
-		role: state.role,
-		createdAt: new Date(),
-	})),
+	getUserOrgMembership: mocks.getUserOrgMembership,
+	getUserOrgMembershipByProject: mocks.getUserOrgMembershipByProject,
 }));
 
 vi.mock('../src/queries/project.queries', () => ({}));
@@ -63,8 +61,20 @@ describe('account wallet activity authorization', () => {
 			id: 'setup-grant-id',
 			amountMicroUsd: 20_000_000,
 		});
-		mocks.listCreditLedger.mockResolvedValue({ groups: [], nextCursor: null });
-		mocks.listManagedAiUsage.mockResolvedValue({ runs: [], nextCursor: null });
+		mocks.listCreditLedger.mockResolvedValue({ groups: [], nextCursor: null, totalCount: 0 });
+		mocks.listManagedAiUsage.mockResolvedValue({ runs: [], nextCursor: null, totalCount: 0 });
+		mocks.getUserOrgMembership.mockImplementation(async () => ({
+			orgId: 'org-id',
+			userId: 'user-id',
+			role: state.role,
+			createdAt: new Date(),
+		}));
+		mocks.getUserOrgMembershipByProject.mockImplementation(async () => ({
+			orgId: 'project-org-id',
+			userId: 'user-id',
+			role: state.role,
+			createdAt: new Date(),
+		}));
 	});
 
 	it('keeps wallet activity private while returning only the member usage', async () => {
@@ -82,6 +92,7 @@ describe('account wallet activity authorization', () => {
 		await expect(caller().account.listManagedAiUsage({ limit: 10 })).resolves.toEqual({
 			runs: [],
 			nextCursor: null,
+			totalCount: 0,
 		});
 		expect(mocks.getCreditSummary).not.toHaveBeenCalled();
 		expect(mocks.getOrganizationSetupCreditGrant).not.toHaveBeenCalled();
@@ -103,10 +114,12 @@ describe('account wallet activity authorization', () => {
 		await expect(caller().account.listCreditLedger({ limit: 10 })).resolves.toEqual({
 			groups: [],
 			nextCursor: null,
+			totalCount: 0,
 		});
 		await expect(caller().account.listManagedAiUsage({ limit: 10 })).resolves.toEqual({
 			runs: [],
 			nextCursor: null,
+			totalCount: 0,
 		});
 		expect(mocks.listCreditLedger).toHaveBeenCalledWith('org-id', {
 			cursor: undefined,
@@ -114,15 +127,23 @@ describe('account wallet activity authorization', () => {
 		});
 		expect(mocks.listManagedAiUsage).toHaveBeenCalledWith({ orgId: 'org-id' }, { cursor: undefined, limit: 10 });
 	});
+
+	it('uses the selected project organization when a different organization is selected', async () => {
+		await caller('project-id', 'org-id').account.getCreditSummary();
+
+		expect(mocks.getUserOrgMembershipByProject).toHaveBeenCalledWith('user-id', 'project-id');
+		expect(mocks.getCreditSummary).toHaveBeenCalledWith('project-org-id');
+		expect(mocks.getUserOrgMembership).not.toHaveBeenCalled();
+	});
 });
 
-function caller() {
+function caller(selectedProjectId: string | null = null, selectedOrganizationId: string | null = 'org-id') {
 	return testRouter.createCaller({
 		session: {
 			user: { id: 'user-id', name: 'Admin', email: 'admin@example.com' },
 			session: { token: 'session-token' },
 		},
-		selectedProjectId: 'project-id',
-		selectedOrganizationId: 'org-id',
+		selectedProjectId,
+		selectedOrganizationId,
 	} as never);
 }

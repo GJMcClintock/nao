@@ -10,13 +10,13 @@ import { type LanguageModelMiddleware, wrapLanguageModel } from 'ai';
 import { env } from '../env';
 import * as creditWalletQueries from '../queries/credit-wallet.queries';
 import * as projectQueries from '../queries/project.queries';
+import { MAX_OUTPUT_TOKENS } from '../services/agent';
 import * as creditWalletService from '../services/credit-wallet.service';
 import type { TokenUsage } from '../types/chat';
 import type { ModelCosts, ModelSource } from '../types/llm';
 import type { ManagedAiUsageCategory, ManagedAiUsageCostSource, ManagedAiUsageStatus } from '../types/managed-ai-usage';
+import { logger } from '../utils/logger';
 import { createProviderModel, getProviderMeta } from './providers';
-
-const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
 
 export type ManagedAiUsageContext = {
 	userId?: string;
@@ -31,11 +31,15 @@ export type ManagedAiUsageContext = {
 
 export function isManagedAiEnabled(): boolean {
 	return (
-		env.NAO_MODE === 'cloud' &&
-		Boolean(process.env.NAO_MANAGED_OPENAI_API_KEY) &&
-		!env.DISABLED_PROVIDERS.includes('nao')
+		env.NAO_MODE === 'cloud' && Boolean(env.NAO_MANAGED_OPENAI_API_KEY) && !env.DISABLED_PROVIDERS.includes('nao')
 	);
 }
+
+const LEGACY_MANAGED_MODEL_ALIASES: Record<string, string> = {
+	'gpt-5.6-luna': 'gpt-6-luna',
+	'gpt-5.6-terra': 'gpt-6-sol',
+	'gpt-5.6-sol': 'gpt-6-sol',
+};
 
 /** Serves the `nao` models on nao's own OpenAI key and bills every call to the organization's credit wallet. */
 export const managedAiSource: ModelSource = {
@@ -49,19 +53,21 @@ export const managedAiSource: ModelSource = {
 		return [{ provider: 'nao', enabledModels, customModels: [], baseUrl: null }];
 	},
 
-	async resolveModel({ projectId, provider, modelId, usageContext, hasOwnModels }) {
-		const apiKey = process.env.NAO_MANAGED_OPENAI_API_KEY;
-		if (!isManagedAiEnabled() || !apiKey || !usageContext?.userId || !isManagedModel(provider, modelId)) {
-			return null;
-		}
-		if (usageContext.billingMode !== 'unbilled' && (await hasOwnModels())) {
+	async resolveModel({ projectId, provider, modelId, usageContext }) {
+		const apiKey = env.NAO_MANAGED_OPENAI_API_KEY;
+		const resolvedModelId = LEGACY_MANAGED_MODEL_ALIASES[modelId] ?? modelId;
+		if (!isManagedAiEnabled() || !apiKey || !usageContext?.userId || !isManagedModel(provider, resolvedModelId)) {
 			return null;
 		}
 		const orgId = usageContext.orgId ?? (await projectQueries.getProjectById(projectId))?.orgId ?? undefined;
-		const result = createProviderModel(provider, { apiKey }, modelId);
+		const result = createProviderModel(provider, { apiKey }, resolvedModelId);
 		return {
 			...result,
-			model: withManagedAiUsageMetering(result.model, provider, modelId, { ...usageContext, projectId, orgId }),
+			model: withManagedAiUsageMetering(result.model, provider, resolvedModelId, {
+				...usageContext,
+				projectId,
+				orgId,
+			}),
 		};
 	},
 };
@@ -145,16 +151,14 @@ function createManagedAiUsageMiddleware(
 			const { stream, ...rest } = result;
 			return {
 				...rest,
-				stream: stream.pipeThrough(
-					createStreamMeter({
-						operationId,
-						startedAt,
-						modelId,
-						context,
-						rates,
-						params,
-					}),
-				),
+				stream: meterStream(stream, {
+					operationId,
+					startedAt,
+					modelId,
+					context,
+					rates,
+					params,
+				}),
 			};
 		},
 	};
@@ -169,46 +173,77 @@ type ManagedAiStreamMeterOptions = {
 	params: LanguageModelV3CallOptions;
 };
 
-function createStreamMeter(
+function meterStream(
+	stream: ReadableStream<LanguageModelV3StreamPart>,
 	options: ManagedAiStreamMeterOptions,
-): TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart> {
-	let recorded = false;
+): ReadableStream<LanguageModelV3StreamPart> {
 	let streamedChars = 0;
 	let providerRequestId: string | undefined;
+	let recording: Promise<void> | undefined;
 	const recordOnce = async (status: ManagedAiUsageStatus, usage: LanguageModelV3Usage, finishReason?: string) => {
-		if (recorded) {
-			return;
+		if (!recording) {
+			options.params.abortSignal?.removeEventListener('abort', recordAbort);
+			recording = recordManagedAiUsage({ ...options, status, usage, finishReason, providerRequestId });
 		}
-		recorded = true;
-		await recordManagedAiUsage({ ...options, status, usage, finishReason, providerRequestId });
+		await recording;
+	};
+	const estimatedUsage = () => estimateUsage(options.params, streamedChars);
+	const recordAbort = () => {
+		recording = recordOnce('aborted', estimatedUsage()).catch((error) => {
+			logger.error(`Failed to record aborted managed AI stream: ${String(error)}`, {
+				source: 'agent',
+				projectId: options.context.projectId,
+				context: { operationId: options.operationId },
+			});
+		});
 	};
 
-	options.params.abortSignal?.addEventListener(
-		'abort',
-		() => void recordOnce('aborted', estimateUsage(options.params, streamedChars)),
-		{ once: true },
-	);
+	options.params.abortSignal?.addEventListener('abort', recordAbort, { once: true });
 
-	return new TransformStream({
-		async transform(chunk, controller) {
-			if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-delta') {
-				streamedChars += chunk.delta.length;
-			} else if (chunk.type === 'response-metadata') {
-				providerRequestId = chunk.id;
-			} else if (chunk.type === 'finish') {
-				await recordOnce('completed', chunk.usage, chunk.finishReason.unified);
-			} else if (chunk.type === 'error') {
-				await recordOnce('failed', estimateUsage(options.params, streamedChars));
+	const reader = stream.getReader();
+	return new ReadableStream({
+		async pull(controller) {
+			try {
+				const result = await reader.read();
+				if (result.done) {
+					await recordOnce(options.params.abortSignal?.aborted ? 'aborted' : 'failed', estimatedUsage());
+					controller.close();
+					return;
+				}
+				const chunk = result.value;
+				if (
+					chunk.type === 'text-delta' ||
+					chunk.type === 'reasoning-delta' ||
+					chunk.type === 'tool-input-delta'
+				) {
+					streamedChars += chunk.delta.length;
+				} else if (chunk.type === 'response-metadata') {
+					providerRequestId = chunk.id;
+				} else if (chunk.type === 'finish') {
+					await recordOnce('completed', chunk.usage, chunk.finishReason.unified);
+				} else if (chunk.type === 'error') {
+					await recordOnce('failed', estimatedUsage());
+				}
+				controller.enqueue(chunk);
+			} catch (error) {
+				try {
+					await recordOnce(options.params.abortSignal?.aborted ? 'aborted' : 'failed', estimatedUsage());
+				} finally {
+					controller.error(error);
+				}
 			}
-			controller.enqueue(chunk);
+		},
+		async cancel(reason) {
+			await Promise.all([reader.cancel(reason), recordOnce('aborted', estimatedUsage())]);
 		},
 	});
 }
 
-// ponytail: chars/4 over the serialized prompt (including base64 attachments) and streamed deltas is
-// a coarse stand-in for the usage the provider never reports on abort. Upgrade: a tokenizer-based count.
+// ponytail: chars/4 over the serialized prompt, tool definitions, and streamed deltas is a coarse
+// stand-in for the usage the provider never reports on abort. Upgrade: a tokenizer-based count.
 function estimateUsage(params: LanguageModelV3CallOptions, streamedChars: number): LanguageModelV3Usage {
-	const inputTokens = Math.ceil((JSON.stringify(params.prompt) ?? '').length / 4);
+	const serializedInput = `${JSON.stringify(params.prompt) ?? ''}${JSON.stringify(params.tools) ?? ''}`;
+	const inputTokens = Math.ceil(serializedInput.length / 4);
 	const outputTokens = Math.ceil(streamedChars / 4);
 	return {
 		inputTokens: { total: inputTokens, noCache: inputTokens, cacheRead: 0, cacheWrite: 0 },
@@ -299,7 +334,8 @@ async function recordManagedAiUsage(options: RecordManagedAiUsageOptions): Promi
 		await creditWalletService.recordUnbilledManagedAiUsage(usage);
 		return;
 	}
-	await creditWalletService.recordManagedAiUsageAndChargeWallet(usage, costs.total ?? 0);
+	const customerChargeMicroUsd = options.status === 'failed' ? 0 : (costs.total ?? 0);
+	await creditWalletService.recordManagedAiUsageAndChargeWallet(usage, customerChargeMicroUsd);
 }
 
 function resolveRates(provider: LlmProvider, modelId: string, declaredCosts?: ModelCosts): ModelCosts | undefined {
@@ -336,7 +372,7 @@ function calculateCategoryCost(tokens?: number, rateUsdPerMillion?: number): num
 function calculateReservationMicroUsd(params: LanguageModelV3CallOptions, rates: ModelCosts): number {
 	const estimatedInputTokens = estimateUsage(params, 0).inputTokens.total ?? 0;
 	const highestInputRate = Math.max(rates.inputNoCache ?? 0, rates.inputCacheRead ?? 0, rates.inputCacheWrite ?? 0);
-	const outputTokens = params.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+	const outputTokens = params.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
 	return Math.max(
 		1,
 		calculateCategoryCost(estimatedInputTokens, highestInputRate) +
@@ -370,8 +406,7 @@ function toTokenUsage(usage: LanguageModelV3Usage): TokenUsage {
 
 async function hasWalletBalance(projectId: string): Promise<boolean> {
 	const project = await projectQueries.getProjectById(projectId);
-	const summary = project?.orgId ? await creditWalletQueries.getCreditSummary(project.orgId) : null;
-	return (summary?.balanceMicroUsd ?? 0) > 0;
+	return project?.orgId ? (await creditWalletQueries.getCreditBalance(project.orgId)) > 0 : false;
 }
 
 function isManagedModel(provider: LlmProvider, modelId: string): boolean {

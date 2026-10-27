@@ -28,7 +28,6 @@ import * as telegramConfigQueries from '../queries/project-telegram-config.queri
 import * as whatsappConfigQueries from '../queries/project-whatsapp-config.queries';
 import * as projectWhatsappLinkQueries from '../queries/project-whatsapp-link.queries';
 import * as userQueries from '../queries/user.queries';
-import { reconcileOrganizationSetupGrant } from '../services/credit-grant.service';
 import {
 	type DefaultModelsOverview,
 	getDefaultModelsOverview,
@@ -44,6 +43,7 @@ import { MattermostConnectionError, validateMattermostConnection } from '../serv
 import { mcpService } from '../services/mcp';
 import { removeProjectMember } from '../services/membership.service';
 import { posthog, PostHogEvent } from '../services/posthog';
+import { updateProjectEnvVars } from '../services/project.service';
 import { listShareableMembers } from '../services/project-sharing.service';
 import { slackService } from '../services/slack';
 import { listAvailableTranscribeModels as getAvailableTranscribeModels } from '../services/transcribe.service';
@@ -1314,8 +1314,7 @@ export const projectRoutes = {
 	updateEnvVars: adminProtectedProcedure
 		.input(z.object({ envVars: z.record(z.string(), z.string()) }))
 		.mutation(async ({ ctx, input }) => {
-			await projectQueries.updateEnvVars(ctx.project.id, input.envVars);
-			await reconcileOrganizationSetupGrant(ctx.project.id);
+			await updateProjectEnvVars(ctx.project.id, input.envVars);
 			void mcpService.refreshProjectConfig(ctx.project.id);
 		}),
 

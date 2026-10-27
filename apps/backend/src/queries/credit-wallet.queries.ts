@@ -1,8 +1,8 @@
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, countDistinct, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import s from '../db/abstractSchema';
 import { db } from '../db/db';
-import type { CreditGrantType } from '../types/managed-ai-usage';
+import { creditGrantIdempotencyKey, type CreditGrantType } from '../types/managed-ai-usage';
 import * as userQueries from './user.queries';
 
 export type CreditLedgerCursor = { createdAt: Date; id: string };
@@ -61,6 +61,15 @@ export async function getOrganizationSetupCreditGrant(
 	return grant ?? null;
 }
 
+export async function getCreditBalance(orgId: string): Promise<number> {
+	const [wallet] = await db
+		.select({ balanceMicroUsd: s.creditWallet.balanceMicroUsd })
+		.from(s.creditWallet)
+		.where(eq(s.creditWallet.orgId, orgId))
+		.limit(1);
+	return wallet?.balanceMicroUsd ?? 0;
+}
+
 export async function getCreditSummary(orgId: string): Promise<{
 	balanceMicroUsd: number;
 	lifetimeCreditedMicroUsd: number;
@@ -87,24 +96,33 @@ export async function getCreditSummary(orgId: string): Promise<{
 export async function listCreditLedger(
 	orgId: string,
 	input: { cursor?: CreditLedgerCursor; limit: number },
-): Promise<{ groups: CreditLedgerGroup[]; nextCursor: CreditLedgerCursor | null }> {
+): Promise<{ groups: CreditLedgerGroup[]; nextCursor: CreditLedgerCursor | null; totalCount: number }> {
 	const groupId = sql<string>`coalesce(${s.managedAiUsage.runId}, ${s.creditLedger.id})`;
 	const latestCreatedAt = sql<Date>`max(${s.creditLedger.createdAt})`.mapWith(s.creditLedger.createdAt);
 	const cursorCreatedAt = input.cursor && sql.param(input.cursor.createdAt, s.creditLedger.createdAt);
-	const groupRows = await db
-		.select({ id: groupId, createdAt: latestCreatedAt })
-		.from(s.creditLedger)
-		.innerJoin(s.creditWallet, eq(s.creditLedger.walletId, s.creditWallet.id))
-		.leftJoin(s.managedAiUsage, eq(s.creditLedger.usageId, s.managedAiUsage.id))
-		.where(and(eq(s.creditWallet.orgId, orgId), ne(s.creditLedger.entryType, 'reservation')))
-		.groupBy(groupId)
-		.having(
-			input.cursor
-				? sql`(${latestCreatedAt} < ${cursorCreatedAt} or (${latestCreatedAt} = ${cursorCreatedAt} and ${groupId} < ${input.cursor.id}))`
-				: undefined,
-		)
-		.orderBy(desc(latestCreatedAt), desc(groupId))
-		.limit(input.limit + 1);
+	const ledgerFilter = and(eq(s.creditWallet.orgId, orgId), ne(s.creditLedger.entryType, 'reservation'));
+	const [groupRows, [countRow]] = await Promise.all([
+		db
+			.select({ id: groupId, createdAt: latestCreatedAt })
+			.from(s.creditLedger)
+			.innerJoin(s.creditWallet, eq(s.creditLedger.walletId, s.creditWallet.id))
+			.leftJoin(s.managedAiUsage, eq(s.creditLedger.usageId, s.managedAiUsage.id))
+			.where(ledgerFilter)
+			.groupBy(groupId)
+			.having(
+				input.cursor
+					? sql`(${latestCreatedAt} < ${cursorCreatedAt} or (${latestCreatedAt} = ${cursorCreatedAt} and ${groupId} < ${input.cursor.id}))`
+					: undefined,
+			)
+			.orderBy(desc(latestCreatedAt), desc(groupId))
+			.limit(input.limit + 1),
+		db
+			.select({ totalCount: countDistinct(groupId) })
+			.from(s.creditLedger)
+			.innerJoin(s.creditWallet, eq(s.creditLedger.walletId, s.creditWallet.id))
+			.leftJoin(s.managedAiUsage, eq(s.creditLedger.usageId, s.managedAiUsage.id))
+			.where(ledgerFilter),
+	]);
 	const hasNext = groupRows.length > input.limit;
 	const page = groupRows.slice(0, input.limit);
 	const rows =
@@ -167,6 +185,7 @@ export async function listCreditLedger(
 	return {
 		groups,
 		nextCursor: hasNext && last ? { createdAt: last.createdAt, id: last.id } : null,
+		totalCount: countRow?.totalCount ?? 0,
 	};
 }
 
@@ -176,10 +195,6 @@ export interface CreditLedgerGroup {
 	entries: (typeof s.creditLedger.$inferSelect)[];
 	grantedForUserName: string | null;
 	usageUserName: string | null;
-}
-
-function creditGrantIdempotencyKey(grantType: CreditGrantType, subjectId: string): string {
-	return grantType === 'organization_setup' ? `organization-setup:v0:${subjectId}` : `user-join:v0:${subjectId}`;
 }
 
 function getGrantedForUserId(entry: typeof s.creditLedger.$inferSelect): string | null {

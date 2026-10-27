@@ -7,14 +7,17 @@ import { useCreditTopUp } from './use-credit-top-up';
 
 const mocks = vi.hoisted(() => ({
 	invalidateQueries: vi.fn(async () => undefined),
-	mutate: vi.fn(),
-	refetch: vi.fn(),
+	checkoutMutate: vi.fn(),
+	confirmTopUp: vi.fn(async () => ({ credited: false })),
+	resetConfirmation: vi.fn(),
 	statusData: undefined as { credited: boolean } | undefined,
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-	useMutation: () => ({ error: null, isPending: false, mutate: mocks.mutate }),
-	useQuery: () => ({ data: mocks.statusData, refetch: mocks.refetch }),
+	useMutation: (options: { kind?: string }) =>
+		options.kind === 'confirmation'
+			? { data: mocks.statusData, mutateAsync: mocks.confirmTopUp, reset: mocks.resetConfirmation }
+			: { error: null, isPending: false, mutate: mocks.checkoutMutate },
 	useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
 }));
 
@@ -28,7 +31,7 @@ vi.mock('@/main', () => ({
 		},
 		billing: {
 			createCreditTopUpCheckoutSession: { mutationOptions: (options: object) => options },
-			getCreditTopUpStatus: { queryOptions: () => ({}) },
+			confirmCreditTopUp: { mutationOptions: () => ({ kind: 'confirmation' }) },
 			getInvoices: { queryKey: () => ['invoices'] },
 		},
 		project: {
@@ -48,6 +51,24 @@ describe('useCreditTopUp', () => {
 	afterEach(() => {
 		cleanup();
 		vi.useRealTimers();
+	});
+
+	it('stops polling after 15 seconds despite pending confirmation updates', () => {
+		const { result, rerender } = renderHook(() => useCreditTopUp('cs_test'));
+
+		act(() => vi.advanceTimersByTime(5_000));
+		act(() => {
+			mocks.statusData = { credited: false };
+			rerender();
+		});
+		act(() => vi.advanceTimersByTime(5_000));
+		act(() => {
+			mocks.statusData = undefined;
+			rerender();
+		});
+		act(() => vi.advanceTimersByTime(5_000));
+
+		expect(result.current.showRetry).toBe(true);
 	});
 
 	it('refreshes wallet data when confirmation arrives after polling times out', () => {

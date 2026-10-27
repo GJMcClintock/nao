@@ -10,7 +10,7 @@ import { getProjectAvailableModels, resolveProviderModel } from '../src/utils/ll
 const mocks = vi.hoisted(() => ({
 	getProjectById: vi.fn(),
 	getProjectLlmConfigs: vi.fn(),
-	getCreditSummary: vi.fn(),
+	getCreditBalance: vi.fn(),
 }));
 
 vi.mock('../src/queries/project.queries', () => ({
@@ -23,7 +23,7 @@ vi.mock('../src/queries/project-llm-config.queries', () => ({
 }));
 
 vi.mock('../src/queries/credit-wallet.queries', () => ({
-	getCreditSummary: mocks.getCreditSummary,
+	getCreditBalance: mocks.getCreditBalance,
 }));
 
 vi.mock('../src/utils/logger', () => ({
@@ -40,6 +40,11 @@ function writeConfig(lines: string[]): string {
 	return dir;
 }
 
+function enableManagedAi(): void {
+	process.env.NAO_MANAGED_OPENAI_API_KEY = 'managed-key';
+	__reloadEnvForTesting();
+}
+
 describe('getProjectAvailableModels', () => {
 	beforeEach(() => {
 		originalEnv = { ...process.env };
@@ -51,7 +56,7 @@ describe('getProjectAvailableModels', () => {
 		__reloadEnvForTesting();
 		vi.clearAllMocks();
 		mocks.getProjectLlmConfigs.mockResolvedValue([]);
-		mocks.getCreditSummary.mockResolvedValue({ balanceMicroUsd: 0 });
+		mocks.getCreditBalance.mockResolvedValue(0);
 	});
 
 	afterEach(() => {
@@ -62,30 +67,34 @@ describe('getProjectAvailableModels', () => {
 		}
 	});
 
-	it('lists the curated nao models only when the project has no other provider', async () => {
-		process.env.NAO_MANAGED_OPENAI_API_KEY = 'managed-key';
+	it('keeps the curated nao models available after BYOK is configured', async () => {
+		enableManagedAi();
 		mocks.getProjectById.mockResolvedValue({ id: 'project-1', orgId: 'org-1', path: null, envVars: {} });
-		mocks.getCreditSummary.mockResolvedValue({ balanceMicroUsd: 480_000 });
+		mocks.getCreditBalance.mockResolvedValue(480_000);
 
 		const managed = await getProjectAvailableModels('project-1');
 		expect(managed.map(({ provider, modelId }) => ({ provider, modelId }))).toEqual([
-			{ provider: 'nao', modelId: 'gpt-5.6-luna' },
-			{ provider: 'nao', modelId: 'gpt-5.6-terra' },
-			{ provider: 'nao', modelId: 'gpt-5.6-sol' },
+			{ provider: 'nao', modelId: 'gpt-6-luna' },
+			{ provider: 'nao', modelId: 'gpt-6-sol' },
 		]);
-		expect(mocks.getCreditSummary).toHaveBeenCalledWith('org-1');
+		expect(mocks.getCreditBalance).toHaveBeenCalledWith('org-1');
 		await expect(
-			resolveProviderModel('project-1', 'nao', 'gpt-5.6-luna', true, {
+			resolveProviderModel('project-1', 'nao', 'gpt-6-luna', true, {
 				userId: 'user-1',
 				category: 'chat',
 			}),
 		).resolves.not.toBeNull();
-		await expect(
-			resolveProviderModel('project-1', 'nao', 'gpt-5.6-pro', true, {
+		for (const [legacyModelId, currentModelId] of [
+			['gpt-5.6-luna', 'gpt-6-luna'],
+			['gpt-5.6-terra', 'gpt-6-sol'],
+			['gpt-5.6-sol', 'gpt-6-sol'],
+		]) {
+			const resolved = await resolveProviderModel('project-1', 'nao', legacyModelId, true, {
 				userId: 'user-1',
 				category: 'chat',
-			}),
-		).resolves.toBeNull();
+			});
+			expect(resolved?.model.modelId).toBe(currentModelId);
+		}
 
 		mocks.getProjectLlmConfigs.mockResolvedValue([
 			{
@@ -96,17 +105,20 @@ describe('getProjectAvailableModels', () => {
 			},
 		]);
 		const byok = await getProjectAvailableModels('project-1');
-		expect(byok).toHaveLength(1);
-		expect(byok[0]).toMatchObject({ provider: 'openai', modelId: 'gpt-5-mini' });
+		expect(byok.map(({ provider, modelId }) => ({ provider, modelId }))).toEqual([
+			{ provider: 'openai', modelId: 'gpt-5-mini' },
+			{ provider: 'nao', modelId: 'gpt-6-luna' },
+			{ provider: 'nao', modelId: 'gpt-6-sol' },
+		]);
 		await expect(
-			resolveProviderModel('project-1', 'nao', 'gpt-5.6-luna', true, {
+			resolveProviderModel('project-1', 'nao', 'gpt-6-luna', true, {
 				userId: 'user-1',
 				category: 'chat',
 			}),
-		).resolves.toBeNull();
+		).resolves.not.toBeNull();
 		mocks.getProjectLlmConfigs.mockClear();
 		await expect(
-			resolveProviderModel('project-1', 'nao', 'gpt-5.6-sol', true, {
+			resolveProviderModel('project-1', 'nao', 'gpt-6-sol', true, {
 				userId: 'user-1',
 				category: 'chat',
 				billingMode: 'unbilled',
@@ -116,9 +128,9 @@ describe('getProjectAvailableModels', () => {
 	});
 
 	it('hides managed models when the wallet has no credits', async () => {
-		process.env.NAO_MANAGED_OPENAI_API_KEY = 'managed-key';
+		enableManagedAi();
 		mocks.getProjectById.mockResolvedValue({ id: 'project-1', orgId: 'org-1', path: null, envVars: {} });
-		mocks.getCreditSummary.mockResolvedValue({ balanceMicroUsd: 0 });
+		mocks.getCreditBalance.mockResolvedValue(0);
 
 		const models = await getProjectAvailableModels('project-1');
 
@@ -126,20 +138,19 @@ describe('getProjectAvailableModels', () => {
 	});
 
 	it('offers managed models when an environment provider has no selectable model', async () => {
-		process.env.NAO_MANAGED_OPENAI_API_KEY = 'managed-key';
+		enableManagedAi();
 		process.env.OPENAI_COMPATIBLE_BASE_URL = 'http://localhost:8000/v1';
 		mocks.getProjectById.mockResolvedValue({ id: 'project-1', orgId: 'org-1', path: null, envVars: {} });
-		mocks.getCreditSummary.mockResolvedValue({ balanceMicroUsd: 19_200 });
+		mocks.getCreditBalance.mockResolvedValue(19_200);
 
 		const models = await getProjectAvailableModels('project-1');
 
 		expect(models.filter(({ provider }) => provider === 'nao').map(({ modelId }) => modelId)).toEqual([
-			'gpt-5.6-luna',
-			'gpt-5.6-terra',
-			'gpt-5.6-sol',
+			'gpt-6-luna',
+			'gpt-6-sol',
 		]);
 		await expect(
-			resolveProviderModel('project-1', 'nao', 'gpt-5.6-luna', true, {
+			resolveProviderModel('project-1', 'nao', 'gpt-6-luna', true, {
 				userId: 'user-1',
 				category: 'chat',
 			}),
@@ -155,7 +166,7 @@ describe('getProjectAvailableModels', () => {
 		const models = await getProjectAvailableModels('project-1');
 		expect(models.some(({ provider }) => provider === 'nao')).toBe(false);
 		await expect(
-			resolveProviderModel('project-1', 'nao', 'gpt-5.6-luna', true, {
+			resolveProviderModel('project-1', 'nao', 'gpt-6-luna', true, {
 				userId: 'user-1',
 				category: 'chat',
 			}),

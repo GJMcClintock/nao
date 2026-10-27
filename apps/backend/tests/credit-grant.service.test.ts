@@ -31,6 +31,7 @@ vi.mock('../src/db/db', async () => {
 
 import s from '../src/db/abstractSchema';
 import { db } from '../src/db/db';
+import * as creditGrantQueries from '../src/queries/credit-grant.queries';
 import {
 	getCreditGrant,
 	getCreditSummary,
@@ -40,6 +41,7 @@ import * as projectQueries from '../src/queries/project.queries';
 import * as userQueries from '../src/queries/user.queries';
 import {
 	activateUserJoinCandidates,
+	reconcileCreditGrants,
 	reconcileOrganizationSetupGrant,
 	reconcileOrganizationSetupGrants,
 	recordOrganizationJoinCandidate,
@@ -55,8 +57,8 @@ const tempDirectories: string[] = [];
 describe('automatic credit grants', () => {
 	beforeAll(async () => {
 		await db.insert(s.creditGrantPolicy).values([
-			{ grantType: 'organization_setup', amountMicroUsd: 20_000_000 },
-			{ grantType: 'user_join', amountMicroUsd: 5_000_000 },
+			{ grantType: 'organization_setup', amountMicroUsd: 20_000_000, maxGrantsPerOrg: 1 },
+			{ grantType: 'user_join', amountMicroUsd: 5_000_000, maxGrantsPerOrg: 100 },
 		]);
 	});
 
@@ -108,6 +110,16 @@ describe('automatic credit grants', () => {
 		expect(await getCreditGrant('organization_setup', 'warehouse-setup-org')).toEqual({
 			orgId: 'warehouse-setup-org',
 		});
+	});
+
+	it('does not grant setup credits for a project without a configured database', async () => {
+		const projectPath = createProjectDirectory('empty-setup', false);
+		fs.writeFileSync(path.join(projectPath, 'nao_config.yaml'), 'project_name: Test\n');
+		await insertOrganizationAndProject('empty-setup-org', 'empty-setup-project', projectPath, {});
+
+		await recordOrganizationSetupCandidate('empty-setup-project');
+
+		expect(await getCreditGrant('organization_setup', 'empty-setup-org')).toBeNull();
 	});
 
 	it('reconciles setup candidates backfilled for existing ready projects', async () => {
@@ -175,7 +187,7 @@ describe('automatic credit grants', () => {
 		const getProjectById = projectQueries.getProjectById;
 		const candidateProjectIds = new Set(['deduplicated-first-project', 'deduplicated-second-project']);
 		let lookupFailed = false;
-		vi.spyOn(projectQueries, 'getProjectById').mockImplementation(async (projectId) => {
+		const projectLookup = vi.spyOn(projectQueries, 'getProjectById').mockImplementation(async (projectId) => {
 			if (candidateProjectIds.has(projectId) && !lookupFailed) {
 				lookupFailed = true;
 				throw new Error('transient project lookup failure');
@@ -203,6 +215,10 @@ describe('automatic credit grants', () => {
 				([input]) => input.grantType === 'user_join' && input.userId === 'deduplicated-user',
 			),
 		).toHaveLength(1);
+
+		projectLookup.mockClear();
+		await reconcileOrganizationSetupGrants();
+		expect(projectLookup.mock.calls.filter(([projectId]) => candidateProjectIds.has(projectId))).toHaveLength(0);
 	});
 
 	it('reconciles join grants when another project becomes ready in a funded organization', async () => {
@@ -283,6 +299,33 @@ describe('automatic credit grants', () => {
 		expect((await getCreditSummary('invited-org')).balanceMicroUsd).toBe(25_000_000);
 	});
 
+	it('does not activate a provisioned project member with an expired session', async () => {
+		await insertReadyFundedOrganization('expired-session-org', 'expired-session-project');
+		await db.insert(s.user).values({
+			id: 'expired-session-user',
+			name: 'Expired Session User',
+			email: 'expired-session@example.com',
+			requiresPasswordReset: true,
+		});
+		await db.insert(s.projectMember).values({
+			projectId: 'expired-session-project',
+			userId: 'expired-session-user',
+			role: 'user',
+		});
+		await db.insert(s.session).values({
+			id: 'expired-session',
+			token: 'expired-session-token',
+			userId: 'expired-session-user',
+			expiresAt: new Date(Date.now() - 60_000),
+			updatedAt: new Date(),
+		});
+
+		await recordProjectJoinCandidate('expired-session-project', 'expired-session-user');
+
+		expect(await getCreditGrant('user_join', 'expired-session-user')).toBeNull();
+		expect((await getCreditSummary('expired-session-org')).balanceMicroUsd).toBe(20_000_000);
+	});
+
 	it('rechecks activity after recording a pending join candidate', async () => {
 		await insertReadyFundedOrganization('concurrent-org', 'concurrent-project');
 		await db.insert(s.user).values({
@@ -309,6 +352,54 @@ describe('automatic credit grants', () => {
 		expect(await getCreditGrant('user_join', 'concurrent-user')).toEqual({ orgId: 'concurrent-org' });
 	});
 
+	it('reconciles activated join candidates in checkpointed batches', async () => {
+		await insertReadyFundedOrganization('lifecycle-org', 'lifecycle-project');
+		const sweepStartedAt = new Date();
+		const candidateCreatedAt = new Date(sweepStartedAt.getTime() + 1_000);
+		for (const userId of ['000-lifecycle-user-1', '000-lifecycle-user-2']) {
+			await db.insert(s.user).values({ id: userId, name: userId, email: `${userId}@example.com` });
+			await db.insert(s.orgMember).values({ orgId: 'lifecycle-org', userId, role: 'user' });
+			await db.insert(s.creditGrantCandidate).values({
+				id: userId,
+				grantType: 'user_join',
+				orgId: 'lifecycle-org',
+				userId,
+				sourceKey: `org-member:lifecycle-org:${userId}`,
+				activatedAt: new Date(),
+				createdAt: candidateCreatedAt,
+			});
+		}
+
+		const cursor = await reconcileCreditGrants(
+			{ userJoinCandidate: { createdAt: sweepStartedAt.toISOString(), id: '' } },
+			1,
+		);
+
+		expect(await getCreditGrant('user_join', '000-lifecycle-user-1')).toEqual({ orgId: 'lifecycle-org' });
+		expect(await getCreditGrant('user_join', '000-lifecycle-user-2')).toBeNull();
+
+		await reconcileCreditGrants(cursor, 1);
+
+		expect(await getCreditGrant('user_join', '000-lifecycle-user-2')).toEqual({ orgId: 'lifecycle-org' });
+	});
+
+	it('preserves database timestamp precision between reconciliation batches', async () => {
+		const createdAt = '2026-10-26 15:18:00.123456';
+		const listCandidates = vi
+			.spyOn(creditGrantQueries, 'listActivatedUserJoinCandidateBatch')
+			.mockResolvedValueOnce([{ id: 'candidate-1', userId: null, cursorCreatedAt: createdAt }])
+			.mockResolvedValueOnce([]);
+
+		const cursor = await reconcileCreditGrants({}, 1);
+		expect(cursor.userJoinCandidate).toEqual({ createdAt, id: 'candidate-1' });
+
+		await reconcileCreditGrants(cursor, 1);
+		expect(listCandidates).toHaveBeenNthCalledWith(2, {
+			after: { createdAt, id: 'candidate-1' },
+			limit: 1,
+		});
+	});
+
 	it('reads the current database policy without changing earlier gifts', async () => {
 		await insertReadyFundedOrganization('policy-org', 'policy-project');
 		await db
@@ -326,10 +417,42 @@ describe('automatic credit grants', () => {
 			role: 'user',
 		});
 
-		await recordOrganizationJoinCandidate('policy-org', 'later-user');
+		try {
+			await recordOrganizationJoinCandidate('policy-org', 'later-user');
 
-		expect(await getCreditGrant('user_join', 'later-user')).toEqual({ orgId: 'policy-org' });
-		expect((await getCreditSummary('policy-org')).balanceMicroUsd).toBe(26_000_000);
+			expect(await getCreditGrant('user_join', 'later-user')).toEqual({ orgId: 'policy-org' });
+			expect((await getCreditSummary('policy-org')).balanceMicroUsd).toBe(26_000_000);
+		} finally {
+			await db
+				.update(s.creditGrantPolicy)
+				.set({ amountMicroUsd: 5_000_000 })
+				.where(eq(s.creditGrantPolicy.grantType, 'user_join'));
+		}
+	});
+
+	it('caps user join grants per organization using the database policy', async () => {
+		await insertReadyFundedOrganization('capped-org', 'capped-project');
+		await db
+			.update(s.creditGrantPolicy)
+			.set({ maxGrantsPerOrg: 2 })
+			.where(eq(s.creditGrantPolicy.grantType, 'user_join'));
+		try {
+			for (const userId of ['capped-user-1', 'capped-user-2', 'capped-user-3']) {
+				await db.insert(s.user).values({ id: userId, name: userId, email: `${userId}@example.com` });
+				await db.insert(s.orgMember).values({ orgId: 'capped-org', userId, role: 'user' });
+				await recordOrganizationJoinCandidate('capped-org', userId);
+			}
+
+			expect(await getCreditGrant('user_join', 'capped-user-1')).toEqual({ orgId: 'capped-org' });
+			expect(await getCreditGrant('user_join', 'capped-user-2')).toEqual({ orgId: 'capped-org' });
+			expect(await getCreditGrant('user_join', 'capped-user-3')).toBeNull();
+			expect((await getCreditSummary('capped-org')).balanceMicroUsd).toBe(30_000_000);
+		} finally {
+			await db
+				.update(s.creditGrantPolicy)
+				.set({ maxGrantsPerOrg: 100 })
+				.where(eq(s.creditGrantPolicy.grantType, 'user_join'));
+		}
 	});
 
 	it('does not fail the originating operation when grant reconciliation fails', async () => {
@@ -398,7 +521,7 @@ function createProjectDirectory(name: string, requiresEnvironmentVariable: boole
 		path.join(directory, 'nao_config.yaml'),
 		requiresEnvironmentVariable
 			? 'project_name: Test\ndatabases:\n  - name: warehouse\n    connection: "{{ env(\'DATABASE_URL\') }}"\n'
-			: 'project_name: Test\n',
+			: 'project_name: Test\ndatabases:\n  - name: warehouse\n    connection: sqlite:///warehouse.db\n',
 	);
 	return directory;
 }

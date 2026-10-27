@@ -25,6 +25,7 @@ import { listManagedAiUsage } from '../src/queries/managed-ai-usage.queries';
 import { listProjectChats } from '../src/queries/project.queries';
 import * as creditWalletService from '../src/services/credit-wallet.service';
 import { ManagedCreditsExhaustedError } from '../src/utils/error';
+import { logger } from '../src/utils/logger';
 
 const {
 	issueCreditGrant,
@@ -96,8 +97,12 @@ const usage: LanguageModelV3Usage = {
 describe('managed AI usage and organization credits', () => {
 	beforeAll(async () => {
 		await db.insert(s.creditGrantPolicy).values([
-			{ grantType: 'organization_setup', amountMicroUsd: ORGANIZATION_SETUP_GRANT_MICRO_USD },
-			{ grantType: 'user_join', amountMicroUsd: USER_JOIN_GRANT_MICRO_USD },
+			{
+				grantType: 'organization_setup',
+				amountMicroUsd: ORGANIZATION_SETUP_GRANT_MICRO_USD,
+				maxGrantsPerOrg: 1,
+			},
+			{ grantType: 'user_join', amountMicroUsd: USER_JOIN_GRANT_MICRO_USD, maxGrantsPerOrg: 100 },
 		]);
 		await db.insert(s.user).values([
 			{ id: MANAGED_USER_ID, name: 'Managed User', email: 'managed@example.com' },
@@ -239,7 +244,7 @@ describe('managed AI usage and organization credits', () => {
 
 	it('allows members whose join gift funded another organization to use a shared wallet', async () => {
 		const providerCall = vi.fn(async () => generateResult());
-		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-5.6-luna', {
+		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-6-luna', {
 			userId: SECOND_USER_ID,
 			orgId: ORG_ID,
 			projectId: PROJECT_ID,
@@ -254,7 +259,7 @@ describe('managed AI usage and organization credits', () => {
 
 	it('rejects managed usage without a billed organization before calling the provider', async () => {
 		const providerCall = vi.fn(async () => generateResult());
-		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-5.6-luna', {
+		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-6-luna', {
 			userId: MANAGED_USER_ID,
 			category: 'chat',
 		});
@@ -265,7 +270,7 @@ describe('managed AI usage and organization credits', () => {
 
 	it('records unbilled managed usage without touching an organization wallet', async () => {
 		const providerCall = vi.fn(async () => generateResult());
-		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-5.6-sol', {
+		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-6-sol', {
 			userId: MANAGED_USER_ID,
 			projectId: PROJECT_ID,
 			category: 'chat',
@@ -282,7 +287,7 @@ describe('managed AI usage and organization credits', () => {
 		expect(providerCall).toHaveBeenCalledOnce();
 		expect(rows).toEqual([
 			expect.objectContaining({
-				llmModelId: 'gpt-5.6-sol',
+				llmModelId: 'gpt-6-sol',
 				customerChargeMicroUsd: 0,
 				walletId: null,
 			}),
@@ -298,7 +303,7 @@ describe('managed AI usage and organization credits', () => {
 			chatId: CHAT_ID,
 			category: 'chat',
 		};
-		const model = withManagedAiUsageMetering(createModel(), 'nao', 'gpt-5.6-luna', context);
+		const model = withManagedAiUsageMetering(createModel(), 'nao', 'gpt-6-luna', context);
 		context.messageId = MESSAGE_ID;
 		await model.doGenerate({} as LanguageModelV3CallOptions);
 		const streamed = await model.doStream({} as LanguageModelV3CallOptions);
@@ -343,13 +348,38 @@ describe('managed AI usage and organization credits', () => {
 		expect(Number(ledgerTotal.total)).toBe(summary.balanceMicroUsd);
 	});
 
+	it('includes tool definitions in the credit reservation', async () => {
+		const reserveCredits = vi.spyOn(creditWalletService, 'reserveManagedAiCredits');
+		const model = withManagedAiUsageMetering(createModel(), 'nao', 'gpt-6-luna', {
+			userId: MANAGED_USER_ID,
+			orgId: ORG_ID,
+			category: 'chat',
+		});
+
+		await model.doGenerate({ maxOutputTokens: 1 } as LanguageModelV3CallOptions);
+		await model.doGenerate({
+			maxOutputTokens: 1,
+			tools: [
+				{
+					type: 'function',
+					name: 'large_tool',
+					description: 'x'.repeat(4_000),
+					inputSchema: { type: 'object', properties: {} },
+				},
+			],
+		});
+
+		expect(reserveCredits.mock.calls[0]?.[2]).toBe(1);
+		expect(reserveCredits.mock.calls[1]?.[2] ?? 0).toBeGreaterThan(1);
+	});
+
 	it('propagates settlement failures after successful generation', async () => {
 		const settlementError = new Error('wallet settlement failed');
 		const settleUsage = vi
 			.spyOn(creditWalletService, 'recordManagedAiUsageAndChargeWallet')
 			.mockRejectedValueOnce(settlementError);
 		const providerCall = vi.fn(async () => generateResult());
-		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-5.6-luna', {
+		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-6-luna', {
 			userId: MANAGED_USER_ID,
 			orgId: ORG_ID,
 			category: 'chat',
@@ -362,7 +392,7 @@ describe('managed AI usage and organization credits', () => {
 
 	it('does not log BYOK usage or touch the organization wallet', async () => {
 		const providerCall = vi.fn(async () => generateResult());
-		const model = withManagedAiUsageMetering(createModel(providerCall), 'openai', 'gpt-5.6-luna', {
+		const model = withManagedAiUsageMetering(createModel(providerCall), 'openai', 'gpt-6-luna', {
 			userId: BYOK_USER_ID,
 			orgId: ORG_ID,
 			projectId: PROJECT_ID,
@@ -385,7 +415,7 @@ describe('managed AI usage and organization credits', () => {
 				senderUserId: MANAGED_USER_ID,
 				role: 'assistant',
 				llmProvider: 'openai',
-				llmModelId: 'gpt-5.6-luna',
+				llmModelId: 'gpt-6-luna',
 				inputNoCacheTokens: 1_000_000,
 				totalTokens: 1_000_000,
 			},
@@ -395,7 +425,7 @@ describe('managed AI usage and organization credits', () => {
 				senderUserId: MANAGED_USER_ID,
 				role: 'assistant',
 				llmProvider: 'nao',
-				llmModelId: 'gpt-5.6-luna',
+				llmModelId: 'gpt-6-luna',
 				inputNoCacheTokens: 1_000_000,
 				totalTokens: 1_000_000,
 			},
@@ -411,7 +441,7 @@ describe('managed AI usage and organization credits', () => {
 				chatId: HYBRID_CHAT_ID,
 				category: 'chat',
 				llmProvider: 'nao',
-				llmModelId: 'gpt-5.6-luna',
+				llmModelId: 'gpt-6-luna',
 				status: 'completed',
 				costSource: 'price_book',
 				completedAt: new Date(),
@@ -420,19 +450,20 @@ describe('managed AI usage and organization credits', () => {
 		);
 
 		const replay = await listProjectChats(PROJECT_ID, { pageSize: 100 });
-		expect(replay.chats.find((chat) => chat.id === HYBRID_CHAT_ID)?.totalCost).toBeCloseTo(2.2);
+		expect(replay.chats.find((chat) => chat.id === HYBRID_CHAT_ID)?.totalCost).toBeCloseTo(2.1);
 	});
 
 	it('records an estimated charge when a stream is aborted', async () => {
 		const controller = new AbortController();
+		const runId = crypto.randomUUID();
 		const model = withManagedAiUsageMetering(
 			createModel(undefined, [
 				{ type: 'text-delta', id: 'text-1', delta: 'done' },
 				{ type: 'tool-input-delta', id: 'tool-1', delta: 'tool' },
 			]),
 			'nao',
-			'gpt-5.6-luna',
-			{ userId: MANAGED_USER_ID, orgId: ORG_ID, category: 'chat' },
+			'gpt-6-luna',
+			{ userId: MANAGED_USER_ID, orgId: ORG_ID, runId, category: 'chat' },
 		);
 		const { stream } = await model.doStream({
 			prompt: [{ role: 'user', content: [{ type: 'text', text: 'x'.repeat(4_000) }] }],
@@ -445,20 +476,158 @@ describe('managed AI usage and organization credits', () => {
 		await reader.cancel();
 
 		await vi.waitFor(async () => {
-			const rows = await db.select().from(s.managedAiUsage).where(eq(s.managedAiUsage.status, 'aborted'));
-			expect(rows.at(-1)).toMatchObject({ costSource: 'estimated', outputTotalTokens: 2 });
+			const rows = await db
+				.select()
+				.from(s.managedAiUsage)
+				.where(and(eq(s.managedAiUsage.runId, runId), eq(s.managedAiUsage.status, 'aborted')));
+			expect(rows).toEqual([expect.objectContaining({ costSource: 'estimated', outputTotalTokens: 2 })]);
 		});
 	});
 
-	it('records failed provider calls without replacing the provider error', async () => {
+	it('does not propagate abort settlement failures through stream cancellation', async () => {
+		const settlementError = new Error('wallet settlement failed');
+		vi.spyOn(creditWalletService, 'recordManagedAiUsageAndChargeWallet').mockRejectedValueOnce(settlementError);
+		const logError = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+		const controller = new AbortController();
+		const model = withManagedAiUsageMetering(
+			createModel(undefined, [{ type: 'text-delta', id: 'text-1', delta: 'done' }]),
+			'nao',
+			'gpt-6-luna',
+			{ userId: MANAGED_USER_ID, orgId: ORG_ID, category: 'chat' },
+		);
+		const { stream } = await model.doStream({
+			abortSignal: controller.signal,
+		} as LanguageModelV3CallOptions);
+		const reader = stream.getReader();
+		await reader.read();
+
+		controller.abort();
+
+		await expect(reader.cancel()).resolves.toBeUndefined();
+		expect(logError).toHaveBeenCalledOnce();
+	});
+
+	it('records a failed stream that closes without a finish chunk', async () => {
+		const runId = crypto.randomUUID();
+		const sourceModel = createModel();
+		sourceModel.doStream = async () => ({
+			stream: new ReadableStream<LanguageModelV3StreamPart>({
+				start(controller) {
+					controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'done' });
+					controller.close();
+				},
+			}),
+		});
+		const model = withManagedAiUsageMetering(sourceModel, 'nao', 'gpt-6-luna', {
+			userId: MANAGED_USER_ID,
+			orgId: ORG_ID,
+			runId,
+			category: 'chat',
+		});
+
+		const { stream } = await model.doStream({} as LanguageModelV3CallOptions);
+		await consume(stream);
+
+		const rows = await db
+			.select()
+			.from(s.managedAiUsage)
+			.where(and(eq(s.managedAiUsage.runId, runId), eq(s.managedAiUsage.status, 'failed')));
+		expect(rows).toEqual([expect.objectContaining({ costSource: 'estimated', outputTotalTokens: 1 })]);
+	});
+
+	it('records a failed stream when its source throws', async () => {
+		const providerError = new Error('stream failed');
+		const runId = crypto.randomUUID();
+		const sourceModel = createModel();
+		let sent = false;
+		sourceModel.doStream = async () => ({
+			stream: new ReadableStream<LanguageModelV3StreamPart>({
+				pull(controller) {
+					if (!sent) {
+						sent = true;
+						controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'done' });
+						return;
+					}
+					controller.error(providerError);
+				},
+			}),
+		});
+		const model = withManagedAiUsageMetering(sourceModel, 'nao', 'gpt-6-luna', {
+			userId: MANAGED_USER_ID,
+			orgId: ORG_ID,
+			runId,
+			category: 'chat',
+		});
+
+		const { stream } = await model.doStream({} as LanguageModelV3CallOptions);
+		await expect(consume(stream)).rejects.toBe(providerError);
+
+		const rows = await db
+			.select()
+			.from(s.managedAiUsage)
+			.where(and(eq(s.managedAiUsage.runId, runId), eq(s.managedAiUsage.status, 'failed')));
+		expect(rows).toEqual([expect.objectContaining({ costSource: 'estimated', outputTotalTokens: 1 })]);
+	});
+
+	it('records an aborted stream when its consumer cancels without an abort signal', async () => {
+		const cancelSource = vi.fn();
+		const settlement = Promise.withResolvers<void>();
+		const settleUsage = vi
+			.spyOn(creditWalletService, 'recordManagedAiUsageAndChargeWallet')
+			.mockImplementationOnce(async (...args) => {
+				await settlement.promise;
+				return recordManagedAiUsageAndChargeWallet(...args);
+			});
+		const runId = crypto.randomUUID();
+		const sourceModel = createModel();
+		sourceModel.doStream = async () => ({
+			stream: new ReadableStream<LanguageModelV3StreamPart>({
+				start(controller) {
+					controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'done' });
+				},
+				cancel: cancelSource,
+			}),
+		});
+		const model = withManagedAiUsageMetering(sourceModel, 'nao', 'gpt-6-luna', {
+			userId: MANAGED_USER_ID,
+			orgId: ORG_ID,
+			runId,
+			category: 'chat',
+		});
+
+		const { stream } = await model.doStream({} as LanguageModelV3CallOptions);
+		const reader = stream.getReader();
+		await reader.read();
+		const cancellation = reader.cancel('consumer stopped');
+		try {
+			await vi.waitFor(() => {
+				expect(settleUsage).toHaveBeenCalledOnce();
+			});
+			expect(cancelSource).toHaveBeenCalledWith('consumer stopped');
+		} finally {
+			settlement.resolve();
+			await cancellation;
+		}
+
+		const rows = await db
+			.select()
+			.from(s.managedAiUsage)
+			.where(and(eq(s.managedAiUsage.runId, runId), eq(s.managedAiUsage.status, 'aborted')));
+		expect(rows).toEqual([expect.objectContaining({ costSource: 'estimated', outputTotalTokens: 1 })]);
+		expect(cancelSource).toHaveBeenCalledWith('consumer stopped');
+	});
+
+	it('records failed provider calls without charging or replacing the provider error', async () => {
 		const providerError = new Error('provider unavailable');
+		const runId = crypto.randomUUID();
+		const before = await getCreditSummary(ORG_ID);
 		const model = withManagedAiUsageMetering(
 			createModel(async () => {
 				throw providerError;
 			}),
 			'nao',
-			'gpt-5.6-luna',
-			{ userId: MANAGED_USER_ID, orgId: ORG_ID, category: 'chat' },
+			'gpt-6-luna',
+			{ userId: MANAGED_USER_ID, orgId: ORG_ID, runId, category: 'chat' },
 		);
 
 		await expect(
@@ -466,13 +635,18 @@ describe('managed AI usage and organization credits', () => {
 				prompt: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
 			} as LanguageModelV3CallOptions),
 		).rejects.toBe(providerError);
-		const rows = await db.select().from(s.managedAiUsage).where(eq(s.managedAiUsage.status, 'failed'));
-		expect(rows.at(-1)).toMatchObject({ costSource: 'estimated' });
+		const rows = await db
+			.select()
+			.from(s.managedAiUsage)
+			.where(and(eq(s.managedAiUsage.runId, runId), eq(s.managedAiUsage.status, 'failed')));
+		expect(rows).toEqual([expect.objectContaining({ costSource: 'estimated', customerChargeMicroUsd: 0 })]);
+		expect(rows[0]?.upstreamCostMicroUsd).toBeGreaterThan(0);
+		expect((await getCreditSummary(ORG_ID)).balanceMicroUsd).toBe(before.balanceMicroUsd);
 	});
 
 	it('blocks an exhausted wallet before calling the provider', async () => {
 		const providerCall = vi.fn(async () => generateResult());
-		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-5.6-luna', {
+		const model = withManagedAiUsageMetering(createModel(providerCall), 'nao', 'gpt-6-luna', {
 			userId: EXHAUSTED_USER_ID,
 			orgId: EXHAUSTED_ORG_ID,
 			category: 'chat',
@@ -484,8 +658,8 @@ describe('managed AI usage and organization credits', () => {
 		expect(providerCall).not.toHaveBeenCalled();
 	});
 
-	it('reserves credits before dispatch and never settles below zero', async () => {
-		await db.update(s.creditWallet).set({ balanceMicroUsd: 2 }).where(eq(s.creditWallet.orgId, EXHAUSTED_ORG_ID));
+	it('reserves credits before dispatch and charges actual overages', async () => {
+		await db.update(s.creditWallet).set({ balanceMicroUsd: 1 }).where(eq(s.creditWallet.orgId, EXHAUSTED_ORG_ID));
 		let releaseProvider!: () => void;
 		const firstProviderCall = vi.fn(
 			async () =>
@@ -495,8 +669,8 @@ describe('managed AI usage and organization credits', () => {
 		);
 		const secondProviderCall = vi.fn(async () => generateResult());
 		const context = { userId: EXHAUSTED_USER_ID, orgId: EXHAUSTED_ORG_ID, category: 'chat' as const };
-		const firstModel = withManagedAiUsageMetering(createModel(firstProviderCall), 'nao', 'gpt-5.6-luna', context);
-		const secondModel = withManagedAiUsageMetering(createModel(secondProviderCall), 'nao', 'gpt-5.6-luna', context);
+		const firstModel = withManagedAiUsageMetering(createModel(firstProviderCall), 'nao', 'gpt-6-luna', context);
+		const secondModel = withManagedAiUsageMetering(createModel(secondProviderCall), 'nao', 'gpt-6-luna', context);
 		const params = { maxOutputTokens: 1 } as LanguageModelV3CallOptions;
 
 		const firstCall = firstModel.doGenerate(params);
@@ -509,10 +683,10 @@ describe('managed AI usage and organization credits', () => {
 
 		const summary = await getCreditSummary(EXHAUSTED_ORG_ID);
 		const rows = await db.select().from(s.managedAiUsage).where(eq(s.managedAiUsage.orgId, EXHAUSTED_ORG_ID));
-		expect(summary.balanceMicroUsd).toBe(0);
+		expect(summary.balanceMicroUsd).toBe(-149);
 		expect(rows.at(-1)).toMatchObject({
-			customerChargeMicroUsd: 2,
-			upstreamCostMicroUsd: 320,
+			customerChargeMicroUsd: 150,
+			upstreamCostMicroUsd: 150,
 		});
 	});
 
@@ -525,7 +699,7 @@ describe('managed AI usage and organization credits', () => {
 			orgId: ORG_ID,
 			category: 'chat' as const,
 			llmProvider: 'nao' as const,
-			llmModelId: 'gpt-5.6-luna',
+			llmModelId: 'gpt-6-luna',
 			status: 'completed' as const,
 			costSource: 'price_book' as const,
 			completedAt: new Date(),
@@ -578,6 +752,10 @@ describe('managed AI usage and organization credits', () => {
 				entryType: 'adjustment',
 			}),
 		).toBe(true);
+		await db
+			.update(s.creditLedger)
+			.set({ purchasePaymentIntentId: null })
+			.where(eq(s.creditLedger.idempotencyKey, 'dispute:dp_purchase:needs_response'));
 		expect(
 			await setCreditPurchaseMovement({
 				paymentIntentId,
@@ -625,7 +803,7 @@ describe('managed AI usage and organization credits', () => {
 					orgId: ORG_ID,
 					category: 'chat',
 					llmProvider: 'nao',
-					llmModelId: 'gpt-5.6-luna',
+					llmModelId: 'gpt-6-luna',
 					status: 'completed',
 					costSource: 'price_book',
 					completedAt: new Date(),
@@ -655,8 +833,12 @@ describe('managed AI usage and organization credits', () => {
 
 		expect(secondUsage.runs.length).toBeGreaterThan(0);
 		expect(secondUsage.runs.map((run) => run.id)).not.toContain(firstUsage.runs[0]?.id);
+		expect(firstUsage.totalCount).toBe(firstUsage.runs.length + secondUsage.runs.length);
+		expect(secondUsage.totalCount).toBe(firstUsage.totalCount);
 		expect(secondLedger.groups.length).toBeGreaterThan(0);
 		expect(secondLedger.groups.map((group) => group.id)).not.toContain(firstLedger.groups[0]?.id);
+		expect(firstLedger.totalCount).toBe(firstLedger.groups.length + secondLedger.groups.length);
+		expect(secondLedger.totalCount).toBe(firstLedger.totalCount);
 	});
 });
 
@@ -733,7 +915,7 @@ function createModel(
 	return {
 		specificationVersion: 'v3',
 		provider: 'test',
-		modelId: 'gpt-5.6-luna',
+		modelId: 'gpt-6-luna',
 		supportedUrls: {},
 		doGenerate,
 		doStream: async () => ({
