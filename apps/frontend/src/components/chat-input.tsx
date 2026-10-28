@@ -1,10 +1,11 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
 	Plus,
 	PencilRuler,
 	Database,
+	Library,
 	Paperclip,
 	AlertTriangle,
 	Shield,
@@ -14,9 +15,21 @@ import {
 	MessageCircleOff,
 } from 'lucide-react';
 import { ALLOWED_IMAGE_MEDIA_TYPES, ATTACHMENT_ACCEPT } from '@nao/shared/attachments';
+import { toStoryReferenceMentionId } from '@nao/shared';
+import { story } from '@nao/shared/tools';
 import { Button, ChatButton, MicButton } from './ui/button';
 import { SlidingWaveform } from './chat-input-sliding-waveform';
-import { ChatPrompt, DATABASE_MENTION_TRIGGER, useStoryMentionOptions } from './chat-input-prompt';
+import {
+	ChatPrompt,
+	DATABASE_MENTION_TRIGGER,
+	openMentionMenuAtEnd,
+	openReferenceMenuAtEnd,
+	SKILL_MENTION_TRIGGER,
+	STORY_REFERENCE_MENTION_TRIGGER,
+	useStoryMentionOptions,
+	useStoryReferenceOptions,
+} from './chat-input-prompt';
+import { ChatInputAnimatedBorder } from './chat-input-animated-border';
 import { ChatInputModelSelect } from './chat-input-model-select';
 import { ChatInputMessageQueue } from './chat-input-message-queue';
 import { ChatInputAttachmentPreview } from './chat-input-attachment-preview';
@@ -32,6 +45,7 @@ import type { MentionOption, PromptHandle, SelectedMention } from 'prompt-mentio
 import type { FormEvent } from 'react';
 import type { AgentHelpers } from '@/hooks/use-agent';
 import type { ChatAllowanceExhaustedScope } from '@/lib/ai';
+import type { StoryReferences } from '@/lib/story-reference';
 import { ContextWindowRing } from '@/components/ui/chat-input-context-window-ring';
 import { SimpleTooltip } from '@/components/ui/tooltip';
 
@@ -50,6 +64,14 @@ import { useOpenOrganizationBilling } from '@/hooks/use-open-organization-billin
 import { usePermissions } from '@/hooks/use-permissions';
 import { getShortcut } from '@/lib/keyboard-shortcuts';
 import { matchesShortcut } from '@/lib/platform';
+import {
+	STORIES_ROOT_ID,
+	TABLES_ROOT_ID,
+	toStoryFolderReferenceOption,
+	toStoryReferenceOption,
+} from '@/lib/reference-mention-menu';
+import { hasAnyStoryReference, mayCarryStories, readDroppedReferences } from '@/lib/story-reference';
+import { takePendingStoryReferences, usePendingStoryReferences } from '@/stores/story-references';
 import { messageQueueStore } from '@/stores/chat-message-queue';
 import { chatInputRestoreStore, useChatInputRestore } from '@/stores/chat-input-restore';
 import { chatPendingCitationStore } from '@/stores/chat-pending-citation';
@@ -75,6 +97,7 @@ type ChatInputBaseProps = {
 	onCancel?: () => void;
 	onSubmitMessage: AgentHelpers['queueOrSendMessage'];
 	allowQueueing?: boolean;
+	acceptsPendingStoryReferences?: boolean;
 };
 
 type ChatInputInlineProps = {
@@ -84,7 +107,13 @@ type ChatInputInlineProps = {
 	onSubmitMessage: AgentHelpers['queueOrSendMessage'];
 };
 
-export function ChatInput({ variant = 'default' }: { variant?: ChatInputVariant }) {
+export function ChatInput({
+	variant = 'default',
+	acceptsPendingStoryReferences = false,
+}: {
+	variant?: ChatInputVariant;
+	acceptsPendingStoryReferences?: boolean;
+}) {
 	const promptRef = useRef<PromptHandle>(null);
 	const { queueOrSendMessage } = useAgentContext();
 
@@ -96,7 +125,15 @@ export function ChatInput({ variant = 'default' }: { variant?: ChatInputVariant 
 		requestAnimationFrame(() => promptRef.current?.focus());
 	});
 
-	return <ChatInputBase promptRef={promptRef} variant={variant} onSubmitMessage={queueOrSendMessage} allowQueueing />;
+	return (
+		<ChatInputBase
+			promptRef={promptRef}
+			variant={variant}
+			onSubmitMessage={queueOrSendMessage}
+			allowQueueing
+			acceptsPendingStoryReferences={acceptsPendingStoryReferences}
+		/>
+	);
 }
 
 export function ChatInputInline({ className, initialText, onCancel, onSubmitMessage }: ChatInputInlineProps) {
@@ -117,11 +154,12 @@ function ChatInputBase({
 	promptRef,
 	className,
 	variant = 'default',
-	placeholder = 'Ask anything about your data...',
+	placeholder,
 	initialText,
 	onCancel,
 	onSubmitMessage,
 	allowQueueing,
+	acceptsPendingStoryReferences = false,
 }: ChatInputBaseProps) {
 	const [inputText, setInputText] = useState('');
 	const {
@@ -140,6 +178,9 @@ function ChatInputBase({
 	const { canChatWithNaoData } = usePermissions();
 	const { storyCreationEnabled } = useEffectiveUserGroupFeatures();
 	const storyMentionOptions = useStoryMentionOptions(storyCreationEnabled);
+	const { options: storyReferenceOptions, isLoaded: areReferenceableStoriesLoaded } = useStoryReferenceOptions({
+		excludeCurrentChat: true,
+	});
 	const chatId = useChatId();
 	const storyBeforeAgentSend = useStoryBeforeAgentSend();
 
@@ -169,12 +210,6 @@ function ChatInputBase({
 		maxDocumentSizeMb: uploadLimits.data?.maxFileSizeMb ?? 0,
 	});
 	const chatInputRestore = useChatInputRestore(!!allowQueueing);
-	const effectivePlaceholder =
-		isRunning && allowQueueing
-			? 'Add a follow-up...'
-			: variant === 'onboarding'
-				? 'Tell me where you are starting from...'
-				: placeholder;
 
 	const agentSettings = useQuery({
 		...trpc.project.getAgentSettings.queryOptions(),
@@ -212,6 +247,68 @@ function ChatInputBase({
 	const [isDragging, setIsDragging] = useState(false);
 
 	useEffect(() => promptRef.current?.focus(), [chatId, promptRef]);
+
+	const queryClient = useQueryClient();
+	const currentProjectId = project.data?.id;
+
+	/** Stories past the referenceable list, such as older ones in a large project, are resolved one by one. */
+	const findStoryReferenceOption = useCallback(
+		async (storyId: string): Promise<MentionOption | null> => {
+			const option = storyReferenceOptions.find(
+				(storyOption) => storyOption.id === toStoryReferenceMentionId(storyId),
+			);
+			if (option) {
+				return option;
+			}
+			const resolved = await queryClient
+				.fetchQuery(trpc.story.resolve.queryOptions({ storyId }))
+				.catch(() => null);
+			return resolved &&
+				!resolved.isArchived &&
+				resolved.chatId !== chatId &&
+				resolved.projectId === currentProjectId
+				? toStoryReferenceOption(resolved)
+				: null;
+		},
+		[storyReferenceOptions, queryClient, chatId, currentProjectId],
+	);
+
+	const storyFolders = useQuery(trpc.storyFolder.listTree.queryOptions({ archived: false }));
+
+	const findFolderReferenceOption = useCallback(
+		(folderId: string): MentionOption | null => {
+			const folder = storyFolders.data?.find((storyFolder) => storyFolder.id === folderId);
+			return folder ? toStoryFolderReferenceOption(folder) : null;
+		},
+		[storyFolders.data],
+	);
+
+	const addStoryReferences = useCallback(
+		async ({ storyIds, folderIds }: StoryReferences) => {
+			const storyOptions = await Promise.all(storyIds.map(findStoryReferenceOption));
+			for (const option of [...storyOptions, ...folderIds.map(findFolderReferenceOption)]) {
+				if (option) {
+					promptRef.current?.appendMention(option, STORY_REFERENCE_MENTION_TRIGGER);
+				}
+			}
+			requestAnimationFrame(() => promptRef.current?.focus());
+		},
+		[findStoryReferenceOption, findFolderReferenceOption, promptRef],
+	);
+
+	const pendingStoryReferences = usePendingStoryReferences();
+
+	const areReferencesLoaded = areReferenceableStoriesLoaded && storyFolders.isSuccess;
+
+	useEffect(() => {
+		if (!acceptsPendingStoryReferences || !hasAnyStoryReference(pendingStoryReferences) || !areReferencesLoaded) {
+			return;
+		}
+		const references = takePendingStoryReferences();
+		if (hasAnyStoryReference(references)) {
+			addStoryReferences(references);
+		}
+	}, [acceptsPendingStoryReferences, pendingStoryReferences, areReferencesLoaded, addStoryReferences]);
 
 	useEffect(() => {
 		if (!allowQueueing || !chatInputRestore) {
@@ -252,7 +349,7 @@ function ChatInputBase({
 		const handleDragEnter = (e: DragEvent) => {
 			e.preventDefault();
 			dragCounter++;
-			if (e.dataTransfer?.types.includes('Files')) {
+			if (e.dataTransfer?.types.includes('Files') || mayCarryStories(e.dataTransfer)) {
 				setIsDragging(true);
 			}
 		};
@@ -273,6 +370,11 @@ function ChatInputBase({
 			e.preventDefault();
 			dragCounter = 0;
 			setIsDragging(false);
+			const references = readDroppedReferences(e.dataTransfer);
+			if (hasAnyStoryReference(references)) {
+				addStoryReferences(references);
+				return;
+			}
 			if (e.dataTransfer?.files) {
 				attachmentUpload.addFiles(e.dataTransfer.files);
 			}
@@ -288,7 +390,7 @@ function ChatInputBase({
 			el.removeEventListener('dragover', handleDragOver);
 			el.removeEventListener('drop', handleDrop);
 		};
-	}, [attachmentUpload.addFiles]); // eslint-disable-line
+	}, [attachmentUpload.addFiles, addStoryReferences]); // eslint-disable-line
 
 	useEffect(() => {
 		const handler = (e: ClipboardEvent) => {
@@ -415,6 +517,17 @@ function ChatInputBase({
 	const databaseObjects = useQuery({ ...trpc.project.getDatabaseObjects.queryOptions(), enabled: hasProject });
 	const hasSkills = hasProject && Boolean(skills.data?.length);
 	const hasDatabases = hasProject && Boolean(databaseObjects.data?.length);
+	const shortcutPlaceholder = buildShortcutPlaceholder({
+		hasContext: hasDatabases || storyReferenceOptions.length > 0,
+		hasSkills,
+		hasStoryMode: storyMentionOptions.length > 0,
+	});
+	const effectivePlaceholder =
+		isRunning && allowQueueing
+			? 'Add a follow-up...'
+			: variant === 'onboarding'
+				? 'Tell me where you are starting from...'
+				: (placeholder ?? shortcutPlaceholder);
 
 	const handleEditQueuedMessage = useCallback(
 		(text: string) => {
@@ -425,13 +538,23 @@ function ChatInputBase({
 		[promptRef],
 	);
 
-	const openSkillsMenu = useCallback(() => {
-		promptRef.current?.insertText('/');
-	}, [promptRef]);
+	const openMentionMenu = useCallback(
+		(trigger: string) => {
+			if (promptRef.current) {
+				openMentionMenuAtEnd(promptRef.current, trigger);
+			}
+		},
+		[promptRef],
+	);
 
-	const openDatabaseMenu = useCallback(() => {
-		promptRef.current?.insertText(DATABASE_MENTION_TRIGGER);
-	}, [promptRef]);
+	const openReferenceMenu = useCallback(
+		(rootId: string) => {
+			if (promptRef.current) {
+				openReferenceMenuAtEnd(promptRef.current, rootId);
+			}
+		},
+		[promptRef],
+	);
 
 	const handleKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
@@ -510,6 +633,7 @@ function ChatInputBase({
 							{mode !== 'onboarding' && (
 								<ChatInputPlusMenu
 									hasDatabases={hasDatabases}
+									hasStoryReferences={storyReferenceOptions.length > 0}
 									hasSkills={hasSkills}
 									storyMentions={storyMentionOptions}
 									canChatWithNaoData={canChatWithNaoData}
@@ -521,8 +645,8 @@ function ChatInputBase({
 									onAddStory={(mention) => {
 										promptRef.current?.appendMention({ id: mention.id, label: mention.label }, '#');
 									}}
-									onOpenSkills={openSkillsMenu}
-									onOpenDatabase={openDatabaseMenu}
+									onOpenMentionMenu={openMentionMenu}
+									onOpenReferenceMenu={openReferenceMenu}
 									onFocusPrompt={() => promptRef.current?.focus()}
 								/>
 							)}
@@ -597,104 +721,6 @@ async function dataUrlToFile(url: string, mediaType: string, name: string): Prom
 	const response = await fetch(url);
 	const blob = await response.blob();
 	return new File([blob], name, { type: mediaType });
-}
-
-const CHAT_INPUT_BORDER_STROKE = 1;
-
-function ChatInputAnimatedBorder() {
-	const containerRef = useRef<HTMLSpanElement>(null);
-	const gradientId = useId();
-	const [{ width, height, radius }, setGeometry] = useState({ width: 0, height: 0, radius: 0 });
-	const [isFocused, setIsFocused] = useState(false);
-
-	useLayoutEffect(() => {
-		const element = containerRef.current;
-		if (!element) {
-			return;
-		}
-		const updateGeometry = () => {
-			setGeometry({
-				width: element.clientWidth,
-				height: element.clientHeight,
-				radius: readBorderRadius(element.parentElement),
-			});
-		};
-		updateGeometry();
-		const observer = new ResizeObserver(updateGeometry);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, []);
-
-	useEffect(() => {
-		const parent = containerRef.current?.parentElement;
-		if (!parent) {
-			return;
-		}
-		const handleFocusIn = () => setIsFocused(true);
-		const handleFocusOut = (event: FocusEvent) => {
-			const nextTarget = event.relatedTarget as Node | null;
-			if (nextTarget && parent.contains(nextTarget)) {
-				return;
-			}
-			setIsFocused(false);
-		};
-		setIsFocused(parent.contains(document.activeElement));
-		parent.addEventListener('focusin', handleFocusIn);
-		parent.addEventListener('focusout', handleFocusOut);
-		return () => {
-			parent.removeEventListener('focusin', handleFocusIn);
-			parent.removeEventListener('focusout', handleFocusOut);
-		};
-	}, []);
-
-	const hasSize = width > 0 && height > 0;
-	const inset = CHAT_INPUT_BORDER_STROKE / 2;
-	const strokeRadius = Math.max(radius - inset, 0);
-	const strokeColor = isFocused ? 'var(--primary)' : 'var(--muted-foreground)';
-
-	return (
-		<span ref={containerRef} aria-hidden='true' className='pointer-events-none absolute inset-0 z-10'>
-			{hasSize && (
-				<svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} fill='none'>
-					<defs>
-						<linearGradient id={gradientId} x1='0%' y1='0%' x2='0%' y2='100%'>
-							<stop
-								className='chat-input-border-stop'
-								offset='0%'
-								style={{ stopColor: strokeColor, stopOpacity: isFocused ? 0.35 : 0.25 }}
-							/>
-							<stop
-								className='chat-input-border-stop'
-								offset='100%'
-								style={{ stopColor: strokeColor, stopOpacity: isFocused ? 1 : 0.4 }}
-							/>
-						</linearGradient>
-					</defs>
-					<rect
-						className='chat-input-border-path'
-						x={inset}
-						y={inset}
-						width={width - CHAT_INPUT_BORDER_STROKE}
-						height={height - CHAT_INPUT_BORDER_STROKE}
-						rx={strokeRadius}
-						ry={strokeRadius}
-						pathLength={100}
-						stroke={`url(#${gradientId})`}
-						strokeWidth={CHAT_INPUT_BORDER_STROKE}
-						strokeLinecap='round'
-					/>
-				</svg>
-			)}
-		</span>
-	);
-}
-
-function readBorderRadius(element: HTMLElement | null): number {
-	if (!element) {
-		return 0;
-	}
-	const radius = parseFloat(getComputedStyle(element).borderTopLeftRadius);
-	return Number.isFinite(radius) ? radius : 0;
 }
 
 function ChatInputAdminBadge() {
@@ -837,6 +863,7 @@ function ManagedCreditsBanner({
 
 function ChatInputPlusMenu({
 	hasDatabases,
+	hasStoryReferences,
 	hasSkills,
 	storyMentions,
 	canChatWithNaoData,
@@ -845,11 +872,12 @@ function ChatInputPlusMenu({
 	onSelectAdminMode,
 	onAddAttachment,
 	onAddStory,
-	onOpenSkills,
-	onOpenDatabase,
+	onOpenMentionMenu,
+	onOpenReferenceMenu,
 	onFocusPrompt,
 }: {
 	hasDatabases: boolean;
+	hasStoryReferences: boolean;
 	hasSkills: boolean;
 	storyMentions: MentionOption[];
 	canChatWithNaoData: boolean;
@@ -859,10 +887,27 @@ function ChatInputPlusMenu({
 	onSelectAdminMode: () => void;
 	onAddAttachment: () => void;
 	onAddStory: (mention: MentionOption) => void;
-	onOpenSkills: () => void;
-	onOpenDatabase: () => void;
+	onOpenMentionMenu: (trigger: string) => void;
+	onOpenReferenceMenu: (rootId: string) => void;
 	onFocusPrompt: () => void;
 }) {
+	const pendingMentionMenuRef = useRef<(() => void) | null>(null);
+
+	/** The menu takes focus back while closing, so the mention menu is opened once the prompt has it again. */
+	const deferMentionMenu = (openMentionMenu: () => void) => {
+		pendingMentionMenuRef.current = openMentionMenu;
+	};
+
+	const restorePromptFocus = () => {
+		const openPendingMentionMenu = pendingMentionMenuRef.current;
+		pendingMentionMenuRef.current = null;
+		if (openPendingMentionMenu) {
+			openPendingMentionMenu();
+		} else {
+			onFocusPrompt();
+		}
+	};
+
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
@@ -881,7 +926,7 @@ function ChatInputPlusMenu({
 				className='min-w-44'
 				onCloseAutoFocus={(e) => {
 					e.preventDefault();
-					requestAnimationFrame(onFocusPrompt);
+					requestAnimationFrame(restorePromptFocus);
 				}}
 			>
 				<DropdownMenuItem onSelect={onAddAttachment}>
@@ -889,9 +934,15 @@ function ChatInputPlusMenu({
 					<span>Attach file</span>
 				</DropdownMenuItem>
 				{hasDatabases && (
-					<DropdownMenuItem onSelect={onOpenDatabase}>
+					<DropdownMenuItem onSelect={() => deferMentionMenu(() => onOpenReferenceMenu(TABLES_ROOT_ID))}>
 						<Database className='size-4' />
 						<span>Database tables</span>
+					</DropdownMenuItem>
+				)}
+				{hasStoryReferences && (
+					<DropdownMenuItem onSelect={() => deferMentionMenu(() => onOpenReferenceMenu(STORIES_ROOT_ID))}>
+						<Library className='size-4' />
+						<span>Reference stories</span>
 					</DropdownMenuItem>
 				)}
 				{storyMentions.map((mention) => (
@@ -901,7 +952,7 @@ function ChatInputPlusMenu({
 					</DropdownMenuItem>
 				))}
 				{hasSkills && (
-					<DropdownMenuItem onSelect={onOpenSkills}>
+					<DropdownMenuItem onSelect={() => deferMentionMenu(() => onOpenMentionMenu(SKILL_MENTION_TRIGGER))}>
 						<PencilRuler className='size-4' />
 						<span>Skills</span>
 					</DropdownMenuItem>
@@ -923,6 +974,24 @@ function ChatInputPlusMenu({
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
+}
+
+function buildShortcutPlaceholder({
+	hasContext,
+	hasSkills,
+	hasStoryMode,
+}: {
+	hasContext: boolean;
+	hasSkills: boolean;
+	hasStoryMode: boolean;
+}): string {
+	const shortcuts = [
+		hasContext && `${DATABASE_MENTION_TRIGGER} context`,
+		hasSkills && `${SKILL_MENTION_TRIGGER} skills`,
+		hasStoryMode && `${story.MENTION_TRIGGER} story mode`,
+	].filter(Boolean);
+	const base = 'Ask anything about your data';
+	return shortcuts.length > 0 ? `${base}, ${shortcuts.join(', ')}` : `${base}...`;
 }
 
 function RecordingTimer() {
