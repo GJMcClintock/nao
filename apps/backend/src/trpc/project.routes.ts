@@ -180,6 +180,21 @@ export const projectRoutes = {
 		return { id: project.id, name: project.name, path: project.path, userRole };
 	}),
 
+	rename: adminProtectedProcedure
+		.input(z.object({ projectId: z.string(), name: z.string().trim().min(1).max(100) }))
+		.mutation(async ({ ctx, input }) => {
+			if (input.projectId !== ctx.project.id) {
+				throw new TRPCError({
+					code: 'CONFLICT',
+					message: 'The selected project changed. Reload the page and try again.',
+				});
+			}
+			const renamed = await projectQueries.renameProject(ctx.project.id, ctx.project.orgId, input.name);
+			if (!renamed) {
+				throw new TRPCError({ code: 'CONFLICT', message: `A project named "${input.name}" already exists.` });
+			}
+		}),
+
 	getDatabaseObjects: projectProtectedProcedure
 		.output(
 			z.array(
