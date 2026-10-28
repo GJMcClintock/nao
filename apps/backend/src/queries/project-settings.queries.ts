@@ -14,14 +14,8 @@ export type ProjectMessagingSettingsKey =
 	| 'whatsappSettings'
 	| 'discordSettings';
 
-const lockForUpdate = <Query extends { execute(): unknown }>(query: Query): Query =>
-	dbConfig.dialect === Dialect.Postgres ? (query as Query & Lockable<Query>).for('update') : query;
-
-type Lockable<Query> = { for(strength: 'update'): Query };
-
 /**
- * Rebuilds one of a project's messaging settings blobs in a transaction and returns the updated row,
- * or the row unchanged when `build` returns `undefined`.
+ * Rebuilds one of a project's messaging settings blobs in a transaction.
  *
  * The body is written twice because the SQLite drivers are synchronous: better-sqlite3 rejects a
  * Promise-returning transaction callback outright, and Bun commits before an async body's awaited
@@ -67,3 +61,8 @@ export const updateProjectSettings = async <K extends ProjectMessagingSettingsKe
 		return tx.update(s.project).set(values).where(eq(s.project.id, projectId)).returning().get() ?? current;
 	});
 };
+
+type Lockable<Query> = { for(strength: 'update'): Query };
+
+const lockForUpdate = <Query extends { execute(): unknown }>(query: Query): Query =>
+	dbConfig.dialect === Dialect.Postgres ? (query as Query & Lockable<Query>).for('update') : query;

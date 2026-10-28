@@ -44,11 +44,19 @@ const readTeamsSettings = async () => {
 
 describe('updateProjectSettings', () => {
 	beforeAll(async () => {
+		// Seeded here so each test asserts against a known blob instead of a sibling test's write.
 		await db.insert(s.project).values({
 			id: PROJECT_ID,
 			name: 'Settings Project',
 			type: 'local',
 			path: '/tmp/project-settings-project',
+			teamsSettings: {
+				teamsAppId: 'app-id',
+				teamsAppPassword: 'app-password',
+				teamsTenantId: 'tenant-id',
+				teamsLlmProvider: 'openai',
+				teamsLlmModelId: 'gpt-4o',
+			},
 		});
 	});
 
