@@ -130,6 +130,7 @@ async function createAuthInstance(baseURL: string) {
 	const githubAllowlist = buildUsernameAllowlist(env.GITHUB_ALLOWED_USERS);
 	const gitlabAllowlist = buildUsernameAllowlist(env.GITLAB_ALLOWED_USERS);
 	const disableEmailSignUp = await shouldDisableEmailSignUp();
+	const emailVerificationEnabled = isCloud && emailService.isEnabled();
 
 	const ssoPlugins: BetterAuthPlugin[] = [];
 
@@ -252,7 +253,7 @@ async function createAuthInstance(baseURL: string) {
 			...ssoPlugins,
 		],
 		trustedOrigins: baseURL ? [baseURL, ...(env.MODE === 'dev' ? ['http://localhost:3000'] : [])] : undefined,
-		emailVerification: isCloud
+		emailVerification: emailVerificationEnabled
 			? {
 					sendVerificationEmail: async ({ user, url }) => {
 						await emailService.sendEmail(user.email, await buildVerifyEmail(user, url), {
@@ -267,7 +268,7 @@ async function createAuthInstance(baseURL: string) {
 		emailAndPassword: {
 			enabled: env.ENABLE_USER_LOGIN === true,
 			disableSignUp: disableEmailSignUp,
-			requireEmailVerification: isCloud,
+			requireEmailVerification: emailVerificationEnabled,
 			sendResetPassword: async ({ user, url }) => {
 				await emailService.sendEmail(user.email, await buildForgotPasswordEmail(user, url));
 			},
