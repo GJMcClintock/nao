@@ -38,6 +38,7 @@ import { SimpleTooltip } from '@/components/ui/tooltip';
 import { useToggleFavorite } from '@/hooks/use-toggle-favorite';
 import { useToggleStoryCertification } from '@/hooks/use-toggle-story-certification';
 import { useActiveStoryTheme } from '@/hooks/use-active-story-theme';
+import { useChatActivity } from '@/hooks/use-chat-activity';
 import { usePermissions } from '@/hooks/use-permissions';
 import { hasAnyStoryReference, setStoryDragData } from '@/lib/story-reference';
 import { selectedStoryReferencesStore } from '@/stores/story-references';
@@ -108,13 +109,15 @@ export function StoryCard({
 	const [pinShareDialogOpen, setPinShareDialogOpen] = useState(false);
 	const isHomePage = useRouterState({ select: (s) => s.location.pathname === '/' });
 	const storyTheme = useActiveStoryTheme();
+	const { running: isAgentEditingStory } = useChatActivity(item.chatId ?? '');
 
 	const draggableId = `drag-story-${dragIdPrefix ? `${dragIdPrefix}-` : ''}${item.storyId}`;
 	const isOwnedByUser = item.kind === 'own' || item.kind === 'own-standalone';
-	const canMove = isOwnedByUser || isAdmin;
+	const canMove = (isOwnedByUser || isAdmin) && !isAgentEditingStory;
+	const isMoveDragDisabled = isViewer || !canMove || (selectionActive && !selected);
 	const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
 		id: draggableId,
-		disabled: isViewer || selectionActive || !canMove,
+		disabled: isMoveDragDisabled,
 		data: { type: 'story', isOwnedByUser },
 	});
 	const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
@@ -187,7 +190,7 @@ export function StoryCard({
 					{...listeners}
 					className={cn(GRID_CARD_CLASS, isDragging && 'opacity-0', selected && 'ring-2 ring-primary')}
 					onClick={handleCardClick}
-					draggable={selectionActive}
+					draggable={selectionActive && isMoveDragDisabled}
 					onDragStart={handleNativeDragStart}
 				>
 					<div className={GRID_THUMBNAIL_CLASS}>
