@@ -34,7 +34,7 @@ import {
 import { augmentPluginsWithOidc, getOidcProviderId, getTrustedProvidersForOidc } from './services/oidc-auth.service';
 import { syncSsoLoginGroups } from './services/sso-login-sync.service';
 import { shouldExpireSsoSession } from './services/sso-session.service';
-import { buildForgotPasswordEmail } from './utils/email-builders';
+import { buildAccountExistsEmail, buildForgotPasswordEmail, buildVerifyEmail } from './utils/email-builders';
 import { logger, serializeError } from './utils/logger';
 import { memoizeUntilRejected } from './utils/memoize-until-rejected';
 import { buildUsernameAllowlist, isEmailDomainAllowed, resolveProviderId } from './utils/utils';
@@ -229,13 +229,45 @@ async function createAuthInstance(baseURL: string) {
 			...ssoPlugins,
 		],
 		trustedOrigins: baseURL ? [baseURL, ...(env.MODE === 'dev' ? ['http://localhost:3000'] : [])] : undefined,
+		emailVerification: isCloud
+			? {
+					sendVerificationEmail: async ({ user, url }) => {
+						await emailService.sendEmail(user.email, await buildVerifyEmail(user, url), {
+							throwOnError: true,
+						});
+					},
+					sendOnSignUp: true,
+					autoSignInAfterVerification: true,
+					expiresIn: 60 * 60,
+				}
+			: undefined,
 		emailAndPassword: {
 			enabled: env.ENABLE_USER_LOGIN === true,
 			disableSignUp: disableEmailSignUp,
+			requireEmailVerification: isCloud,
 			sendResetPassword: async ({ user, url }) => {
 				await emailService.sendEmail(user.email, await buildForgotPasswordEmail(user, url));
 			},
+			onPasswordReset: async ({ user }) => {
+				if (!user.emailVerified) {
+					await userQueries.markEmailVerified(user.id);
+				}
+			},
+			onExistingUserSignUp: async ({ user }, request) => {
+				await emailExistingAccountOwner(user, await readSignUpCallbackURL(request));
+			},
 		},
+		rateLimit: isCloud
+			? {
+					enabled: true,
+					customRules: {
+						'/send-verification-email': {
+							window: 60,
+							max: 3,
+						},
+					},
+				}
+			: undefined,
 		socialProviders,
 		account: {
 			accountLinking: {
@@ -245,6 +277,18 @@ async function createAuthInstance(baseURL: string) {
 		},
 		hooks: {
 			after: createAuthMiddleware(async (ctx) => {
+				if (ctx.path === '/send-verification-email') {
+					const returned = ctx.context.returned as { status?: unknown } | undefined;
+					const existing =
+						returned?.status === true
+							? await ctx.context.internalAdapter.findUserByEmail(ctx.body.email)
+							: null;
+					if (existing?.user.emailVerified) {
+						await sendAccountExistsEmail(existing.user);
+					}
+					return;
+				}
+
 				if (ctx.path !== '/get-session' || !ctx.request) {
 					return;
 				}
@@ -359,6 +403,28 @@ async function createAuthInstance(baseURL: string) {
 			},
 		},
 	});
+}
+
+async function emailExistingAccountOwner(
+	user: { email: string; name: string; emailVerified: boolean },
+	callbackURL: string,
+) {
+	if (user.emailVerified) {
+		await sendAccountExistsEmail(user);
+		return;
+	}
+	const auth = await getAuth();
+	await auth.api.sendVerificationEmail({ body: { email: user.email, callbackURL } });
+}
+
+async function readSignUpCallbackURL(request: Request | undefined): Promise<string> {
+	const body: unknown = await request?.json().catch(() => undefined);
+	const callbackURL = (body as { callbackURL?: unknown } | undefined)?.callbackURL;
+	return typeof callbackURL === 'string' ? callbackURL : '/email-verified';
+}
+
+async function sendAccountExistsEmail(user: { email: string; name: string }) {
+	await emailService.sendEmail(user.email, await buildAccountExistsEmail(user, env.BETTER_AUTH_URL));
 }
 
 async function shouldDisableEmailSignUp(): Promise<boolean> {
