@@ -15,11 +15,15 @@ def resolve_repo_root(target: Path, subpath: str | None) -> Path:
 
     Callers (e.g. docker/entrypoint.sh) may already point ``target`` at the
     project subdirectory inside the clone, so strip the subpath off when it is
-    the trailing part of the path. The subpath is normalized here, so ``"/nao/"``
-    and ``"."`` mean the same as no subpath.
+    the trailing part of the path — unless ``target`` is itself a clone, since
+    a clone root may legitimately be named like the subpath. The subpath is
+    normalized here, so ``"/nao/"`` means ``"nao"``, while ``"."`` means no
+    subpath.
     """
     subpath = (subpath or "").strip("/")
     if subpath in ("", "."):
+        return target
+    if (target / ".git").exists():
         return target
     parts = Path(subpath).parts
     if parts and target.parts[-len(parts) :] == parts:
@@ -85,7 +89,7 @@ class GitContextProvider(ContextProvider):
             subprocess.CalledProcessError: If git command fails.
             ValueError: If cloned repo doesn't contain nao_config.yaml.
         """
-        if self.is_initialized():
+        if (self.repo_root / ".git").exists():
             console.print(f"[dim]Context already initialized at {self.target_path}[/dim]")
             self.refresh()
         else:
@@ -157,17 +161,33 @@ class GitContextProvider(ContextProvider):
     def refresh(self) -> bool:
         """Pull latest changes from the repository.
 
+        Only the clone root is needed to fetch, so a missing project directory
+        never forces a re-clone.
+
         Returns:
             True if changes were pulled, False if already up-to-date.
 
         Raises:
             subprocess.CalledProcessError: If git pull fails.
+            RuntimeError: If the upstream project directory is missing.
         """
-        if not self.is_initialized():
+        if not (self.repo_root / ".git").exists():
             console.print("[yellow]Context not initialized, running init instead[/yellow]")
             self.init()
             return True
 
+        updated = self._pull()
+
+        if not self.target_path.exists():
+            raise RuntimeError(
+                f"{self.target_path} is missing from the clone: the upstream project "
+                "directory no longer exists. Fix it upstream; re-cloning would not help."
+            )
+
+        return updated
+
+    def _pull(self) -> bool:
+        """Fetch and reset the clone to the upstream branch."""
         console.print(f"[cyan]Refreshing context from {self.repo_url}...[/cyan]")
 
         try:
@@ -198,9 +218,9 @@ class GitContextProvider(ContextProvider):
                 )
                 console.print("[green]✓[/green] Context updated")
                 return True
-            else:
-                console.print("[dim]Context already up-to-date[/dim]")
-                return False
+
+            console.print("[dim]Context already up-to-date[/dim]")
+            return False
 
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr.replace(self.token, "***") if self.token else e.stderr
