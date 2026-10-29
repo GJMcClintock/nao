@@ -10,8 +10,9 @@ const mocks = vi.hoisted(() => ({
 	isRunning: true,
 	jobStatus: 'awaiting_context',
 	jobError: null as Error | null,
-	activeJobId: 'job-1' as string | undefined,
-	activeJobIsFetched: true,
+	jobSetupError: undefined as string | undefined,
+	latestJobId: 'job-1' as string | undefined,
+	latestJobIsFetched: true,
 	messages: [] as never[],
 	queueOrSendMessage: vi.fn().mockResolvedValue(undefined),
 }));
@@ -24,15 +25,15 @@ vi.mock('@tanstack/react-query', () => ({
 		reset: vi.fn(),
 	}),
 	useQuery: (options: { queryKey: string[] }) =>
-		options.queryKey[0] === 'active-job'
+		options.queryKey[0] === 'latest-job'
 			? {
-					data: mocks.activeJobId ? { id: mocks.activeJobId, provider: 'postgres' } : undefined,
-					isFetched: mocks.activeJobIsFetched,
+					data: mocks.latestJobId ? { id: mocks.latestJobId, provider: 'postgres' } : undefined,
+					isFetched: mocks.latestJobIsFetched,
 				}
 			: {
 					data:
 						options.queryKey[1] && !mocks.jobError
-							? { provider: 'postgres', status: mocks.jobStatus }
+							? { provider: 'postgres', status: mocks.jobStatus, error: mocks.jobSetupError }
 							: undefined,
 					isError: Boolean(options.queryKey[1] && mocks.jobError),
 					error: options.queryKey[1] ? mocks.jobError : null,
@@ -55,8 +56,8 @@ vi.mock('@/main', () => ({
 			validateWarehouseCredentials: {
 				mutationOptions: () => ({}),
 			},
-			getActiveWarehouseProvisioningJob: {
-				queryOptions: () => ({ queryKey: ['active-job'] }),
+			getLatestWarehouseProvisioningJob: {
+				queryOptions: () => ({ queryKey: ['latest-job'] }),
 			},
 			getWarehouseProvisioningStatus: {
 				queryOptions: ({ jobId }: { jobId: string }) => ({ queryKey: ['job', jobId] }),
@@ -96,15 +97,16 @@ afterEach(() => {
 	mocks.isRunning = true;
 	mocks.jobStatus = 'awaiting_context';
 	mocks.jobError = null;
-	mocks.activeJobId = 'job-1';
-	mocks.activeJobIsFetched = true;
+	mocks.jobSetupError = undefined;
+	mocks.latestJobId = 'job-1';
+	mocks.latestJobIsFetched = true;
 	mocks.messages = [];
 	vi.clearAllMocks();
 });
 
 describe('RequestWarehouseCredentialsToolCall', () => {
 	it('shows a verified state that lets users edit their credentials', async () => {
-		mocks.activeJobId = undefined;
+		mocks.latestJobId = undefined;
 		const toolPart = {
 			type: 'tool-request_warehouse_credentials',
 			toolCallId: 'tool-1',
@@ -177,10 +179,28 @@ describe('RequestWarehouseCredentialsToolCall', () => {
 		expect(screen.getByRole('button', { name: 'View setup' })).toBeTruthy();
 	});
 
-	it('waits for the active job before falling back to a persisted job ID', async () => {
+	it('keeps a failed warehouse setup available for review', async () => {
+		mocks.jobStatus = 'failed';
+		mocks.jobSetupError = 'nao sync failed. Check the logs for details.';
+		const toolPart = {
+			type: 'tool-request_warehouse_credentials',
+			toolCallId: 'tool-1',
+			state: 'output-available',
+			input: { provider: 'postgres' },
+			output: { provider: 'postgres', status: 'credentials-required' },
+		} as ToolCallComponentProps<'request_warehouse_credentials'>['toolPart'];
+		render(<RequestWarehouseCredentialsToolCall toolPart={toolPart} />);
+
+		expect(await screen.findByText('Postgres setup needs attention')).toBeTruthy();
+		fireEvent.click(screen.getByRole('button', { name: 'Review setup' }));
+		expect(await screen.findByText('Project setup stopped')).toBeTruthy();
+		expect(screen.getByText('nao sync failed. Check the logs for details.')).toBeTruthy();
+	});
+
+	it('waits for the latest job before falling back to a persisted job ID', async () => {
 		mocks.isRunning = false;
-		mocks.activeJobId = undefined;
-		mocks.activeJobIsFetched = false;
+		mocks.latestJobId = undefined;
+		mocks.latestJobIsFetched = false;
 		mocks.messages = [
 			{
 				role: 'assistant',
@@ -204,8 +224,8 @@ describe('RequestWarehouseCredentialsToolCall', () => {
 
 		await waitFor(() => expect(mocks.queueOrSendMessage).not.toHaveBeenCalled());
 
-		mocks.activeJobId = 'new-job';
-		mocks.activeJobIsFetched = true;
+		mocks.latestJobId = 'new-job';
+		mocks.latestJobIsFetched = true;
 		view.rerender(<RequestWarehouseCredentialsToolCall toolPart={toolPart} />);
 
 		await waitFor(() =>
