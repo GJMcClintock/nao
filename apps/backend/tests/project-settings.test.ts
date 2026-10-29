@@ -62,17 +62,17 @@ describe('updateProjectSettings', () => {
 
 	// The old `db.transaction(async …)` form failed this outright on better-sqlite3
 	// ("Transaction function cannot return a promise"), which is why the body is synchronous there.
-	it('rebuilds the settings blob without an async transaction callback', async () => {
+	it('persists a changed model through the synchronous SQLite path and returns it', async () => {
 		const updated = await updateProjectSettings(PROJECT_ID, 'teamsSettings', (existing) => ({
 			teamsAppId: 'app-id',
 			teamsAppPassword: 'app-password',
 			teamsTenantId: 'tenant-id',
 			teamsLlmProvider: existing?.teamsLlmProvider ?? 'openai',
-			teamsLlmModelId: 'gpt-4o',
+			teamsLlmModelId: 'gpt-4.1',
 		}));
 
-		expect(updated.teamsSettings?.teamsLlmModelId).toBe('gpt-4o');
-		expect((await readTeamsSettings())?.teamsAppId).toBe('app-id');
+		expect(updated.teamsSettings?.teamsLlmModelId).toBe('gpt-4.1');
+		expect((await readTeamsSettings())?.teamsLlmModelId).toBe('gpt-4.1');
 	});
 
 	it('rolls the write back when the builder throws', async () => {
