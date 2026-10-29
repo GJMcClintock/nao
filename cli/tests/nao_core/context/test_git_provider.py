@@ -74,7 +74,7 @@ def test_init_from_entrypoint_target_or_clone_root(origin: Path, tmp_path: Path,
     assert provider.repo_root == tmp_path / "clone"
     assert provider.target_path == tmp_path / "clone" / "nao"
     assert (provider.target_path / "agent" / "skills" / "x.md").exists()
-    assert not (tmp_path / "clone" / "other").exists(), "sparse checkout should skip the rest of the repo"
+    assert not (tmp_path / "clone" / "other").exists()
 
 
 def test_refresh_preserves_untracked_generated_context(origin: Path, tmp_path: Path) -> None:
@@ -157,18 +157,18 @@ def test_clone_argv_parity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subp
     assert [c for c in calls[1:]] == ([["git", "sparse-checkout", "set", "nao"]] if sparse else [])
 
 
-def test_is_initialized_false_when_subpath_missing(tmp_path: Path) -> None:
+def test_is_initialized_false_when_subpath_missing_but_true_at_clone_root(tmp_path: Path) -> None:
     clone = tmp_path / "clone"
     (clone / ".git").mkdir(parents=True)
 
     subpath_provider = GitContextProvider(repo_url="unused", target_path=clone, subpath="nao")
-    assert subpath_provider.is_initialized() is False, "health must be red when the subpath is absent"
+    assert subpath_provider.is_initialized() is False
 
     root_provider = GitContextProvider(repo_url="unused", target_path=clone)
-    assert root_provider.is_initialized() is True, "root-level deployments have target_path == repo_root"
+    assert root_provider.is_initialized() is True
 
 
-def test_refresh_survives_upstream_removing_project_dir(origin: Path, tmp_path: Path) -> None:
+def test_refresh_keeps_clone_when_upstream_removes_project_dir(origin: Path, tmp_path: Path) -> None:
     provider = GitContextProvider(repo_url=str(origin), target_path=tmp_path / "clone", subpath="nao")
     provider.init()
 
@@ -178,7 +178,7 @@ def test_refresh_survives_upstream_removing_project_dir(origin: Path, tmp_path: 
 
     with pytest.raises(RuntimeError, match="upstream project directory"):
         provider.refresh()
-    assert (provider.repo_root / ".git").exists(), "the clone must not be thrown away"
+    assert (provider.repo_root / ".git").exists()
 
     (origin / "nao").mkdir()
     (origin / "nao" / "nao_config.yaml").write_text("project_name: test\n")

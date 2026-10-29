@@ -17,8 +17,8 @@ def resolve_repo_root(target: Path, subpath: str | None) -> Path:
     project subdirectory inside the clone, so strip the subpath off when it is
     the trailing part of the path — unless ``target`` is itself a clone, since
     a clone root may legitimately be named like the subpath. The subpath is
-    normalized here, so ``"/nao/"`` means ``"nao"``, while ``"."`` means no
-    subpath.
+    normalized here, so ``"/nao/"`` and ``"nao"`` are the same, while ``"."``
+    means no subpath.
     """
     subpath = (subpath or "").strip("/")
     if subpath in ("", "."):
@@ -161,8 +161,8 @@ class GitContextProvider(ContextProvider):
     def refresh(self) -> bool:
         """Pull latest changes from the repository.
 
-        Only the clone root is needed to fetch, so a missing project directory
-        never forces a re-clone.
+        A missing project directory only needs reporting: the clone still
+        fetches, so an upstream restore is picked up by the next refresh.
 
         Returns:
             True if changes were pulled, False if already up-to-date.
@@ -176,18 +176,6 @@ class GitContextProvider(ContextProvider):
             self.init()
             return True
 
-        updated = self._pull()
-
-        if not self.target_path.exists():
-            raise RuntimeError(
-                f"{self.target_path} is missing from the clone: the upstream project "
-                "directory no longer exists. Fix it upstream; re-cloning would not help."
-            )
-
-        return updated
-
-    def _pull(self) -> bool:
-        """Fetch and reset the clone to the upstream branch."""
         console.print(f"[cyan]Refreshing context from {self.repo_url}...[/cyan]")
 
         try:
@@ -208,8 +196,8 @@ class GitContextProvider(ContextProvider):
                 text=True,
             )
 
-            if diff_result.stdout.strip():
-                # There are changes, do a hard reset to FETCH_HEAD
+            updated = bool(diff_result.stdout.strip())
+            if updated:
                 subprocess.run(
                     ["git", "reset", "--hard", "FETCH_HEAD"],
                     cwd=self.repo_root,
@@ -217,15 +205,21 @@ class GitContextProvider(ContextProvider):
                     capture_output=True,
                 )
                 console.print("[green]✓[/green] Context updated")
-                return True
-
-            console.print("[dim]Context already up-to-date[/dim]")
-            return False
+            else:
+                console.print("[dim]Context already up-to-date[/dim]")
 
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr.replace(self.token, "***") if self.token else e.stderr
             console.print(f"[red]✗[/red] Failed to refresh context: {error_msg}")
             raise
+
+        if not self.target_path.exists():
+            raise RuntimeError(
+                f"{self.target_path} is missing from the clone: the upstream project "
+                "directory no longer exists. Restore it upstream; re-cloning would not help."
+            )
+
+        return updated
 
     def is_initialized(self) -> bool:
         """Check if repository has been cloned and the project dir is present.
