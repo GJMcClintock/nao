@@ -10,6 +10,23 @@ from .base import ContextProvider
 console = Console()
 
 
+def resolve_repo_root(target: Path, subpath: str | None) -> Path:
+    """Return the clone root for ``target``.
+
+    Callers (e.g. docker/entrypoint.sh) may already point ``target`` at the
+    project subdirectory inside the clone, so strip the subpath off when it is
+    the trailing part of the path. The subpath is normalized here, so ``"/nao/"``
+    and ``"."`` mean the same as no subpath.
+    """
+    subpath = (subpath or "").strip("/")
+    if subpath in ("", "."):
+        return target
+    parts = Path(subpath).parts
+    if parts and target.parts[-len(parts) :] == parts:
+        return target.parents[len(parts) - 1]
+    return target
+
+
 class GitContextProvider(ContextProvider):
     """Context provider that clones/pulls from a git repository.
 
@@ -23,16 +40,23 @@ class GitContextProvider(ContextProvider):
         target_path: Path,
         branch: str = "main",
         token: str | None = None,
+        subpath: str | None = None,
     ):
         """Initialize the git context provider.
 
         Args:
             repo_url: Git repository URL (https:// or git@).
-            target_path: Local path where repo will be cloned.
+            target_path: Local path where repo will be cloned (may already be
+                the project subdirectory, see ``subpath``).
             branch: Branch to clone/pull (default: 'main').
             token: Auth token for private repos (optional).
+            subpath: nao project directory inside the repository (optional);
+                ``"."`` means the repository root.
         """
-        super().__init__(target_path)
+        subpath = (subpath or "").strip("/")
+        self.subpath = subpath if subpath and subpath != "." else None
+        self.repo_root = resolve_repo_root(Path(target_path), self.subpath)
+        super().__init__(self.repo_root / self.subpath if self.subpath else self.repo_root)
         self.repo_url = repo_url
         self.branch = branch
         self.token = token
@@ -76,18 +100,24 @@ class GitContextProvider(ContextProvider):
     def _clone(self) -> None:
         """Clone the repository.
 
-        Uses shallow clone (--depth 1) for faster initial setup.
+        Uses shallow clone (--depth 1) for faster initial setup; with a subpath
+        only that directory is checked out.
         """
         console.print(f"[cyan]Cloning context from {self.repo_url}...[/cyan]")
 
         # Ensure parent directory exists
-        self.target_path.parent.mkdir(parents=True, exist_ok=True)
+        self.repo_root.parent.mkdir(parents=True, exist_ok=True)
 
         # Remove target if it exists but isn't a git repo
-        if self.target_path.exists() and not (self.target_path / ".git").exists():
+        if self.repo_root.exists() and not (self.repo_root / ".git").exists():
+            if self.subpath:
+                raise RuntimeError(
+                    f"{self.repo_root} exists but is not a git repository; refusing to "
+                    "delete it. Remove it by hand if it is stale."
+                )
             import shutil
 
-            shutil.rmtree(self.target_path)
+            shutil.rmtree(self.repo_root)
 
         cmd = [
             "git",
@@ -97,9 +127,10 @@ class GitContextProvider(ContextProvider):
             "--depth",
             "1",
             "--single-branch",
-            self._get_auth_url(),
-            str(self.target_path),
         ]
+        if self.subpath:
+            cmd += ["--filter=blob:none", "--sparse"]
+        cmd += [self._get_auth_url(), str(self.repo_root)]
 
         try:
             subprocess.run(
@@ -108,6 +139,14 @@ class GitContextProvider(ContextProvider):
                 capture_output=True,
                 text=True,
             )
+            if self.subpath:
+                subprocess.run(
+                    ["git", "sparse-checkout", "set", self.subpath],
+                    cwd=self.repo_root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
             console.print(f"[green]✓[/green] Context cloned to {self.target_path}")
         except subprocess.CalledProcessError as e:
             # Sanitize error message to not expose token
@@ -135,7 +174,7 @@ class GitContextProvider(ContextProvider):
             # Fetch with the auth URL
             subprocess.run(
                 ["git", "fetch", self._get_auth_url(), self.branch],
-                cwd=self.target_path,
+                cwd=self.repo_root,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -144,7 +183,7 @@ class GitContextProvider(ContextProvider):
             # Check if there are changes
             diff_result = subprocess.run(
                 ["git", "diff", "HEAD..FETCH_HEAD", "--stat"],
-                cwd=self.target_path,
+                cwd=self.repo_root,
                 capture_output=True,
                 text=True,
             )
@@ -153,7 +192,7 @@ class GitContextProvider(ContextProvider):
                 # There are changes, do a hard reset to FETCH_HEAD
                 subprocess.run(
                     ["git", "reset", "--hard", "FETCH_HEAD"],
-                    cwd=self.target_path,
+                    cwd=self.repo_root,
                     check=True,
                     capture_output=True,
                 )
@@ -169,9 +208,10 @@ class GitContextProvider(ContextProvider):
             raise
 
     def is_initialized(self) -> bool:
-        """Check if repository has been cloned.
+        """Check if repository has been cloned and the project dir is present.
 
         Returns:
-            True if .git directory exists at target path.
+            True if .git exists at the clone root and the project directory
+            (``repo_root`` for root-level deployments) exists.
         """
-        return (self.target_path / ".git").exists()
+        return (self.repo_root / ".git").exists() and self.target_path.exists()
